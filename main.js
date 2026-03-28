@@ -9,6 +9,7 @@
 // @grant        GM_setValues
 // @grant        unsafeWindow
 // @grant        GM_addStyle
+// @grant        GM_registerMenuCommand
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -212,6 +213,94 @@
   /** 現在の設定を表示 */
   function showConfig() {
     console.log('[X-Observer] 現在の設定:', JSON.parse(JSON.stringify(config)));
+  }
+
+  /**
+   * prompt の入力値を前処理し、空入力を除外した文字列を返す。
+   * 入力: prompt が返した文字列または null
+   * 出力: 前後空白を除去した文字列。キャンセルや空入力時は null
+   * 主な処理内容: trim による正規化と、空文字の登録防止
+   */
+  function normalizePromptInput(input) {
+    if (input === null) return null;
+    const normalized = input.trim();
+    return normalized || null;
+  }
+
+  /**
+   * ポストID入力から statusId を取り出す。
+   * 入力: 数値ID文字列、または X/Twitter の投稿 URL
+   * 出力: 抽出できた statusId。解釈できない場合は null
+   * 主な処理内容:
+   * 1. 数値だけの入力はそのまま採用する
+   * 2. URL 入力は /status/<数字> を正規表現で抽出する
+   */
+  function parseStatusId(input) {
+    if (/^\d+$/.test(input)) {
+      return input;
+    }
+
+    // URL 全体ではなく /status/<数字> に限定して抽出することで、無関係な数値列の誤登録を防ぐ。
+    const match = input.match(/\/status\/(\d+)/);
+    return match ? match[1] : null;
+  }
+
+  /**
+   * Tampermonkey メニューから非表示対象を登録する。
+   * 入力: なし（各メニュー選択時に prompt から文字列を受け取る）
+   * 出力: なし
+   * 主な処理内容:
+   * 1. ユーザーID、ポストID、キーワードの順でメニューを登録する
+   * 2. 入力値を正規化し、既存の addHiddenUser / addHiddenStatus / addHiddenWord を呼ぶ
+   * 3. 登録後に reapplyFilters で現在のタイムラインへ即時反映する
+   */
+  function registerMenuCommands() {
+    GM_registerMenuCommand('非表示ユーザーIDを追加', async () => {
+      const userId = normalizePromptInput(
+        prompt('非表示にしたいユーザーIDを入力してください（@あり/なし両対応）')
+      );
+      if (!userId) {
+        console.log('[X-Observer] 空のユーザーID入力は無視しました');
+        return;
+      }
+
+      await addHiddenUser(userId);
+
+      // メニューから登録した設定を現在表示中の投稿にも即時反映するため、保存後に再判定する。
+      reapplyFilters();
+    });
+
+    GM_registerMenuCommand('非表示ポストIDを追加', async () => {
+      const rawInput = normalizePromptInput(
+        prompt('非表示にしたいポストIDまたは投稿URLを入力してください')
+      );
+      if (!rawInput) {
+        console.log('[X-Observer] 空のポストID入力は無視しました');
+        return;
+      }
+
+      const statusId = parseStatusId(rawInput);
+      if (!statusId) {
+        console.log('[X-Observer] ポストIDを抽出できなかったため登録を中止しました:', rawInput);
+        return;
+      }
+
+      await addHiddenStatus(statusId);
+      reapplyFilters();
+    });
+
+    GM_registerMenuCommand('非表示キーワードを追加', async () => {
+      const word = normalizePromptInput(
+        prompt('非表示にしたいキーワードを入力してください')
+      );
+      if (!word) {
+        console.log('[X-Observer] 空のキーワード入力は無視しました');
+        return;
+      }
+
+      await addHiddenWord(word);
+      reapplyFilters();
+    });
   }
 
   // グローバルに公開
@@ -643,6 +732,8 @@
   async function init() {
     await loadConfig();
     console.log('[X-Observer] 設定を読み込みました:', JSON.parse(JSON.stringify(config)));
+
+    registerMenuCommands();
 
     // UI非表示を有効化（初期状態ON）
     setHideUI(true);
