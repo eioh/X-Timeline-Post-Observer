@@ -23,6 +23,7 @@
   const HIDDEN_ATTR = 'data-xtlo-hidden'
   const EXPIRE_DAYS = 30
   const EXPIRE_MS = EXPIRE_DAYS * 24 * 60 * 60 * 1000
+  const EXPORT_VERSION = 1
 
   // ストレージキー
   const STORAGE_KEYS = {
@@ -133,6 +134,191 @@
   async function saveKey (configKey) {
     const storageKey = STORAGE_KEYS[configKey]
     await GM_setValues({ [storageKey]: config[configKey] })
+  }
+
+  /**
+   * 現在の設定をエクスポート用オブジェクトへ変換する。
+   * 入力: なし
+   * 出力: version と全設定を含むプレーンオブジェクト
+   * 主な処理内容: 現在メモリ上にある config を、将来の互換性を持たせた version 付き形式へ詰め替える
+   */
+  function createExportData () {
+    return {
+      version: EXPORT_VERSION,
+      mediaFilterLists: [...config.mediaFilterLists],
+      hiddenUserIds: [...config.hiddenUserIds],
+      hiddenWords: [...config.hiddenWords],
+      hiddenStatuses: config.hiddenStatuses.map(entry => ({
+        statusId: entry.statusId,
+        expiresAt: entry.expiresAt
+      }))
+    }
+  }
+
+  /**
+   * JSON から読み込んだ設定オブジェクトを検証し、内部保存向けに正規化する。
+   * 入力: JSON.parse 後の値
+   * 出力: 保存可能な設定オブジェクト
+   * 主な処理内容:
+   * 1. version と各配列フィールドの存在と型を確認する
+   * 2. 重複除去や userId の @ 除去で保存形式を揃える
+   * 3. hiddenStatuses の要素構造を最低限検証する
+   */
+  function normalizeImportedConfig (raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('設定JSONのルートはオブジェクトである必要があります')
+    }
+
+    if (raw.version !== EXPORT_VERSION) {
+      throw new Error(`未対応の設定バージョンです: ${raw.version}`)
+    }
+
+    const {
+      mediaFilterLists,
+      hiddenUserIds,
+      hiddenWords,
+      hiddenStatuses
+    } = raw
+
+    if (
+      !Array.isArray(mediaFilterLists) ||
+      !Array.isArray(hiddenUserIds) ||
+      !Array.isArray(hiddenWords) ||
+      !Array.isArray(hiddenStatuses)
+    ) {
+      throw new Error('設定JSONの配列フィールド形式が不正です')
+    }
+
+    const normalizedStatuses = hiddenStatuses.map((entry, index) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw new Error(`hiddenStatuses[${index}] はオブジェクトである必要があります`)
+      }
+      if (typeof entry.statusId !== 'string' || !/^\d+$/.test(entry.statusId)) {
+        throw new Error(`hiddenStatuses[${index}].statusId が不正です`)
+      }
+      if (typeof entry.expiresAt !== 'number' || !Number.isFinite(entry.expiresAt)) {
+        throw new Error(`hiddenStatuses[${index}].expiresAt が不正です`)
+      }
+
+      return {
+        statusId: entry.statusId,
+        expiresAt: entry.expiresAt
+      }
+    })
+
+    return {
+      mediaFilterLists: [...new Set(mediaFilterLists.filter(item => typeof item === 'string'))],
+      hiddenUserIds: [
+        ...new Set(
+          hiddenUserIds
+            .filter(item => typeof item === 'string')
+            .map(item => item.replace(/^@/, ''))
+        )
+      ],
+      hiddenWords: [...new Set(hiddenWords.filter(item => typeof item === 'string'))],
+      hiddenStatuses: normalizedStatuses.filter(
+        (entry, index, entries) =>
+          entries.findIndex(item => item.statusId === entry.statusId) === index
+      )
+    }
+  }
+
+  /**
+   * 読み込んだ設定で現在の保存内容を丸ごと置き換える。
+   * 入力: 正規化済み設定オブジェクト
+   * 出力: なし
+   * 主な処理内容: メモリ上の config と Tampermonkey ストレージを同じ内容へ一括更新する
+   */
+  async function replaceConfig (nextConfig) {
+    config = {
+      mediaFilterLists: nextConfig.mediaFilterLists,
+      hiddenUserIds: nextConfig.hiddenUserIds,
+      hiddenWords: nextConfig.hiddenWords,
+      hiddenStatuses: nextConfig.hiddenStatuses
+    }
+
+    await GM_setValues({
+      [STORAGE_KEYS.mediaFilterLists]: config.mediaFilterLists,
+      [STORAGE_KEYS.hiddenUserIds]: config.hiddenUserIds,
+      [STORAGE_KEYS.hiddenWords]: config.hiddenWords,
+      [STORAGE_KEYS.hiddenStatuses]: config.hiddenStatuses
+    })
+  }
+
+  /**
+   * 現在の設定を JSON ファイルとしてダウンロードする。
+   * 入力: なし
+   * 出力: なし
+   * 主な処理内容: Blob と一時リンクを使って、ユーザー操作起点のメニューから保存ダイアログを開く
+   */
+  function exportConfigToFile () {
+    const exportText = JSON.stringify(createExportData(), null, 2)
+    const blob = new Blob([exportText], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+
+    anchor.href = url
+    anchor.download = `xtlo-config-${timestamp}.json`
+
+    // メニュー操作から直接ダウンロードさせるため、不可視リンクを一時的に DOM へ追加して click を発火する。
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+    URL.revokeObjectURL(url)
+
+    console.log('[X-Observer] 設定をエクスポートしました')
+    alert('設定をエクスポートしました')
+  }
+
+  /**
+   * JSON ファイルから設定を読み込み、現在の保存内容を置き換える。
+   * 入力: なし
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. ファイル選択ダイアログを開く
+   * 2. JSON を読み込んで検証・正規化する
+   * 3. 保存内容を置き換え、再読込と再判定で画面へ反映する
+   */
+  async function importConfigFromFile () {
+    const file = await new Promise(resolve => {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = 'application/json,.json'
+
+      // メニューからファイル選択を開くため、一時 input を使ってブラウザ標準の選択UIへ委ねる。
+      input.addEventListener(
+        'change',
+        () => {
+          resolve(input.files && input.files[0] ? input.files[0] : null)
+        },
+        { once: true }
+      )
+      input.click()
+    })
+
+    if (!file) {
+      console.log('[X-Observer] 設定インポートはキャンセルされました')
+      return
+    }
+
+    const text = await file.text()
+
+    try {
+      const parsed = JSON.parse(text)
+      const normalized = normalizeImportedConfig(parsed)
+
+      await replaceConfig(normalized)
+      await loadConfig()
+      reapplyFilters()
+
+      console.log('[X-Observer] 設定をインポートしました:', JSON.parse(JSON.stringify(config)))
+      alert('設定をインポートしました')
+    } catch (error) {
+      // 不正なJSONや想定外形式で保存内容を壊さないため、検証失敗時は置換処理へ進ませない。
+      console.error('[X-Observer] 設定インポートに失敗しました:', error)
+      alert(`設定インポートに失敗しました: ${error.message}`)
+    }
   }
 
   // ========================================
@@ -253,8 +439,9 @@
    * 出力: なし
    * 主な処理内容:
    * 1. ユーザーID、ポストID、キーワードの順でメニューを登録する
-   * 2. 入力値を正規化し、既存の addHiddenUser / addHiddenStatus / addHiddenWord を呼ぶ
-   * 3. 登録後に reapplyFilters で現在のタイムラインへ即時反映する
+   * 2. エクスポート / インポートメニューを追加する
+   * 3. 入力値を正規化し、既存の addHiddenUser / addHiddenStatus / addHiddenWord を呼ぶ
+   * 4. 登録やインポート後に reapplyFilters で現在のタイムラインへ即時反映する
    */
   function registerMenuCommands () {
     GM_registerMenuCommand('非表示ユーザーIDを追加', async () => {
@@ -306,6 +493,14 @@
       await addHiddenWord(word)
       reapplyFilters()
     })
+
+    GM_registerMenuCommand('設定をエクスポート', () => {
+      exportConfigToFile()
+    })
+
+    GM_registerMenuCommand('設定をインポート', async () => {
+      await importConfigFromFile()
+    })
   }
 
   // グローバルに公開
@@ -318,6 +513,8 @@
     removeHiddenWord,
     addHiddenStatus,
     removeHiddenStatus,
+    exportConfigToFile,
+    importConfigFromFile,
     showConfig,
     reapplyFilters,
     setHideUI,
