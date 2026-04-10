@@ -1,8 +1,10 @@
 /**
- * prompt の戻り値を登録用に正規化する。
- * 入力: prompt が返した文字列または null
- * 出力: trim 済み文字列。空入力やキャンセル時は null
- * 主な処理内容: 空白だけの入力を弾き、各メニュー処理の重複ロジックを減らす
+ * prompt の戻り値を設定追加用に正規化する。
+ * 入力: prompt が返した文字列または null。
+ * 出力: trim 済み文字列、または空入力時の null。
+ * 主な処理内容:
+ * 1. キャンセル時は null を返す
+ * 2. 前後空白を除去し、空文字は null 扱いにする
  */
 function normalizePromptInput (input) {
   if (input === null) return null
@@ -12,29 +14,31 @@ function normalizePromptInput (input) {
 }
 
 /**
- * 投稿 ID 入力から statusId を解釈する。
- * 入力: 数値文字列、または投稿 URL
- * 出力: statusId。解釈不能なら null
- * 主な処理内容: 素の ID はそのまま使い、URL は /status/<数字> 部分だけを抜き出す
+ * 投稿 ID 入力から statusId を取り出す。
+ * 入力: 数字文字列、または投稿 URL。
+ * 出力: statusId、解釈できない場合は null。
+ * 主な処理内容:
+ * 1. 純粋な数字ならそのまま返す
+ * 2. URL からは /status/<数字> を抽出する
  */
 function parseStatusId (input) {
   if (/^\d+$/.test(input)) {
     return input
   }
 
-  // URL 全体から雑に数値を拾うと unrelated な ID を誤登録するため、status パスに限定する。
+  // URL 全体を保存すると unrelated な数字まで拾う危険があるため、status パスだけを見る。
   const match = input.match(/\/status\/(\d+)/)
   return match ? match[1] : null
 }
 
 /**
- * Tampermonkey メニューへ設定変更コマンドを登録する。
- * 入力: 追加・インポート・再適用などのコールバック群
- * 出力: なし
+ * Tampermonkey メニューへ設定操作コマンドを登録する。
+ * 入力: 追加・表示・インポートなどに必要なコールバック群。
+ * 出力: なし。
  * 主な処理内容:
- * 1. ユーザー・投稿・キーワードの追加メニューを作る
- * 2. エクスポート / インポートメニューを作る
- * 3. 登録後に現在画面へ即時反映する
+ * 1. 設定ダイアログを開くメニューを登録する
+ * 2. 既存の prompt ベース操作も後方互換として残す
+ * 3. 追加やインポート後に画面へ再反映する
  */
 export function registerMenuCommands ({
   addHiddenStatus,
@@ -42,14 +46,19 @@ export function registerMenuCommands ({
   addHiddenWord,
   exportConfigToFile,
   importConfigFromFile,
-  reapplyFilters
+  reapplyFilters,
+  openSettingsDialog
 }) {
+  GM_registerMenuCommand('設定ダイアログを開く', () => {
+    openSettingsDialog()
+  })
+
   GM_registerMenuCommand('非表示ユーザーIDを追加', async () => {
     const userId = normalizePromptInput(
-      prompt('非表示にしたいユーザーIDを入力してください（@あり/なし両対応）')
+      prompt('非表示にしたいユーザー ID を入力してください。@ あり/なしどちらでも構いません')
     )
     if (!userId) {
-      console.log('[X-Observer] 空のユーザーID入力は無視しました')
+      console.log('[X-Observer] 空のユーザー ID 入力はキャンセルしました')
       return
     }
 
@@ -59,19 +68,16 @@ export function registerMenuCommands ({
 
   GM_registerMenuCommand('非表示ポストIDを追加', async () => {
     const rawInput = normalizePromptInput(
-      prompt('非表示にしたいポストIDまたは投稿URLを入力してください')
+      prompt('非表示にしたいポスト ID またはポスト URL を入力してください')
     )
     if (!rawInput) {
-      console.log('[X-Observer] 空のポストID入力は無視しました')
+      console.log('[X-Observer] 空のポスト ID 入力はキャンセルしました')
       return
     }
 
     const statusId = parseStatusId(rawInput)
     if (!statusId) {
-      console.log(
-        '[X-Observer] ポストIDを抽出できなかったため登録を中止しました:',
-        rawInput
-      )
+      console.log('[X-Observer] ポスト ID を解釈できませんでした:', rawInput)
       return
     }
 
@@ -84,7 +90,7 @@ export function registerMenuCommands ({
       prompt('非表示にしたいキーワードを入力してください')
     )
     if (!word) {
-      console.log('[X-Observer] 空のキーワード入力は無視しました')
+      console.log('[X-Observer] 空のキーワード入力はキャンセルしました')
       return
     }
 

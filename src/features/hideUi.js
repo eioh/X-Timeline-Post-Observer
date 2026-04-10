@@ -1,14 +1,16 @@
 import { COMPACT_LAYOUT_CSS, CUSTOM_MENU_CSS, HIDE_UI_CSS } from '../constants.js'
 
-// UI 非表示用 style 要素の参照。
-// ON/OFF 切り替え時に同じ style を外せるよう、生成結果を保持している。
+// UI 非表示用の style 要素を保持する。
+// ON/OFF のたびに style を探し直さずに済み、二重挿入も防げるため参照を保持する。
 let hideUIStyleEl = null
 
 /**
- * X のヘッダーや投稿フォームを表示/非表示する。
- * 入力: true で非表示 ON、false で OFF
- * 出力: なし
- * 主な処理内容: GM_addStyle で差し込んだ style 要素を保持し、必要時に remove する
+ * X のヘッダーや投稿フォームを表示/非表示にする。
+ * 入力: true で非表示を有効化、false で解除。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 有効化時は style を挿入する
+ * 2. 無効化時は既存 style を除去する
  */
 export function setHideUI (enabled) {
   if (enabled && !hideUIStyleEl) {
@@ -21,12 +23,17 @@ export function setHideUI (enabled) {
   }
 }
 
-/** 現在状態を反転して UI 非表示を切り替える。 */
+/** 現在の UI 非表示状態を返す。*/
+export function isHideUIEnabled () {
+  return Boolean(hideUIStyleEl)
+}
+
+/** 現在の状態を反転して UI 非表示を切り替える。*/
 export function toggleHideUI () {
   setHideUI(!hideUIStyleEl)
 }
 
-/** 常時必要なレイアウト CSS とメニュー CSS を適用する。 */
+/** 常時必要なレイアウト CSS と独自メニュー CSS を適用する。*/
 export function applyBaseStyles () {
   GM_addStyle(COMPACT_LAYOUT_CSS)
   GM_addStyle(CUSTOM_MENU_CSS)

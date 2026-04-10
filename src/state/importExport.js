@@ -2,10 +2,12 @@ import { EXPORT_VERSION } from '../constants.js'
 import { config, loadConfig, replaceConfig } from './configStore.js'
 
 /**
- * 現在設定をエクスポート用の JSON 形式へ変換する。
- * 入力: なし
- * 出力: version 付きプレーンオブジェクト
- * 主な処理内容: 参照共有を避けるため、配列や要素をコピーして返す
+ * 現在の設定をエクスポート用オブジェクトへ整形する。
+ * 入力: なし。
+ * 出力: version 付きのプレーンオブジェクト。
+ * 主な処理内容:
+ * 1. 配列を複製して参照共有を避ける
+ * 2. 設定画面で扱う真偽値設定も一緒に含める
  */
 export function createExportData () {
   return {
@@ -16,25 +18,29 @@ export function createExportData () {
     hiddenStatuses: config.hiddenStatuses.map(entry => ({
       statusId: entry.statusId,
       expiresAt: entry.expiresAt
-    }))
+    })),
+    settings: {
+      hideUIEnabled: config.hideUIEnabled,
+      autoRefreshEnabled: config.autoRefreshEnabled
+    }
   }
 }
 
 /**
- * JSON から読んだ設定を検証し、保存用形式へ正規化する。
- * 入力: JSON.parse 後の値
- * 出力: 保存可能な設定オブジェクト
+ * JSON から読み込んだ設定を検証し、内部で使う形式へ正規化する。
+ * 入力: JSON.parse 後の値。
+ * 出力: 保存可能な設定オブジェクト。
  * 主な処理内容:
- * 1. version と各フィールド型を検証する
- * 2. hiddenStatuses の要素構造を確認する
- * 3. 重複除去や @ 除去で保存形式を揃える
+ * 1. バージョンと配列構造を検証する
+ * 2. v1 には無かった settings を既定値で補完する
+ * 3. ユーザー ID や重複値を正規化する
  */
 export function normalizeImportedConfig (raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new Error('設定JSONのルートはオブジェクトである必要があります')
+    throw new Error('設定 JSON のルートはオブジェクトである必要があります')
   }
 
-  if (raw.version !== EXPORT_VERSION) {
+  if (![1, EXPORT_VERSION].includes(raw.version)) {
     throw new Error(`未対応の設定バージョンです: ${raw.version}`)
   }
 
@@ -46,7 +52,7 @@ export function normalizeImportedConfig (raw) {
     !Array.isArray(hiddenWords) ||
     !Array.isArray(hiddenStatuses)
   ) {
-    throw new Error('設定JSONの配列フィールド形式が不正です')
+    throw new Error('設定 JSON の配列項目が不正です')
   }
 
   const normalizedStatuses = hiddenStatuses.map((entry, index) => {
@@ -66,7 +72,14 @@ export function normalizeImportedConfig (raw) {
     }
   })
 
-  // 取り込み時に表記ゆれと重複を潰しておくことで、判定側を単純な includes / some に保つ。
+  const rawSettings = raw.version >= 2 ? raw.settings : null
+  if (
+    rawSettings !== null &&
+    (!rawSettings || typeof rawSettings !== 'object' || Array.isArray(rawSettings))
+  ) {
+    throw new Error('settings はオブジェクトである必要があります')
+  }
+
   return {
     mediaFilterLists: [
       ...new Set(mediaFilterLists.filter(item => typeof item === 'string'))
@@ -82,15 +95,25 @@ export function normalizeImportedConfig (raw) {
     hiddenStatuses: normalizedStatuses.filter(
       (entry, index, entries) =>
         entries.findIndex(item => item.statusId === entry.statusId) === index
-    )
+    ),
+    hideUIEnabled:
+      typeof rawSettings?.hideUIEnabled === 'boolean'
+        ? rawSettings.hideUIEnabled
+        : true,
+    autoRefreshEnabled:
+      typeof rawSettings?.autoRefreshEnabled === 'boolean'
+        ? rawSettings.autoRefreshEnabled
+        : true
   }
 }
 
 /**
- * 現在設定を JSON ファイルとしてダウンロードさせる。
- * 入力: なし
- * 出力: なし
- * 主な処理内容: Blob URL と一時 a 要素を使って保存ダイアログを開く
+ * 現在の設定を JSON ファイルとしてダウンロードさせる。
+ * 入力: なし。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 設定を整形して Blob 化する
+ * 2. 一時的なリンクを作成してダウンロードを開始する
  */
 export function exportConfigToFile () {
   const exportText = JSON.stringify(createExportData(), null, 2)
@@ -112,13 +135,13 @@ export function exportConfigToFile () {
 }
 
 /**
- * JSON ファイルを選ばせて設定を丸ごと置き換える。
- * 入力: 再適用コールバックを持つオブジェクト
+ * JSON ファイルを選ばせて設定を取り込み、画面へ再反映する。
+ * 入力: 再適用コールバックを持つオブジェクト。
  * 出力: Promise<void>
  * 主な処理内容:
  * 1. ファイル選択ダイアログを開く
- * 2. JSON を検証・正規化する
- * 3. 保存内容を置換し、画面へ即時反映する
+ * 2. JSON を検証して保存する
+ * 3. 最新設定を再読込して reapplyFilters を呼ぶ
  */
 export async function importConfigFromFile ({ reapplyFilters }) {
   const file = await new Promise(resolve => {
@@ -157,7 +180,7 @@ export async function importConfigFromFile ({ reapplyFilters }) {
     )
     alert('設定をインポートしました')
   } catch (error) {
-    // 検証失敗時に保存済み設定を壊さないため、置換処理前で必ず止める。
+    // パース失敗時も理由を明示しておくと、ファイル形式の不一致と実装不具合を切り分けやすい。
     console.error('[X-Observer] 設定インポートに失敗しました:', error)
     alert(`設定インポートに失敗しました: ${error.message}`)
   }

@@ -1,52 +1,62 @@
 import { EXPIRE_MS, STORAGE_KEYS } from '../constants.js'
 
-// 現在設定の単一参照元。
-// オブジェクト自体を差し替えずに中身だけ更新することで、各モジュールの参照を維持する。
+// 現在の設定を一か所に集約して持つ。
+// オブジェクト自体を差し替えると参照先が古いまま残るため、各モジュールはこの中身を書き換える前提で共有する。
 export const config = {
   mediaFilterLists: [],
   hiddenUserIds: [],
   hiddenWords: [],
-  hiddenStatuses: []
+  hiddenStatuses: [],
+  hideUIEnabled: true,
+  autoRefreshEnabled: true
 }
 
 /**
- * 設定オブジェクトの中身を既存参照を保ったまま更新する。
- * 入力: 次に保持したい設定オブジェクト
- * 出力: なし
- * 主な処理内容: 各配列を config に再代入し、他モジュールの参照切れを防ぐ
+ * 設定オブジェクトの中身を丸ごと新しい値へ更新する。
+ * 入力: 次に反映したい設定オブジェクト。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 共有中の config オブジェクトへ配列と真偽値を上書きする
+ * 2. 参照を保ったまま他モジュールへ最新設定を行き渡らせる
  */
 function assignConfig (nextConfig) {
   config.mediaFilterLists = nextConfig.mediaFilterLists
   config.hiddenUserIds = nextConfig.hiddenUserIds
   config.hiddenWords = nextConfig.hiddenWords
   config.hiddenStatuses = nextConfig.hiddenStatuses
+  config.hideUIEnabled = nextConfig.hideUIEnabled
+  config.autoRefreshEnabled = nextConfig.autoRefreshEnabled
 }
 
 /**
- * Tampermonkey ストレージから設定を読み込み、期限切れ投稿を掃除する。
- * 入力: なし
+ * Tampermonkey ストレージから設定を読み込み、期限切れの投稿 ID も掃除する。
+ * 入力: なし。
  * 出力: Promise<void>
  * 主な処理内容:
- * 1. 既定値つきで保存内容を読む
- * 2. メモリ上の config へ反映する
- * 3. 期限切れ hiddenStatuses を削除して保存し直す
+ * 1. 各設定キーを既定値つきで読み込む
+ * 2. 共通の config へ反映する
+ * 3. hiddenStatuses から期限切れデータを除外して必要なら保存し直す
  */
 export async function loadConfig () {
   const stored = await GM_getValues({
     [STORAGE_KEYS.mediaFilterLists]: [],
     [STORAGE_KEYS.hiddenUserIds]: [],
     [STORAGE_KEYS.hiddenWords]: [],
-    [STORAGE_KEYS.hiddenStatuses]: []
+    [STORAGE_KEYS.hiddenStatuses]: [],
+    [STORAGE_KEYS.hideUIEnabled]: true,
+    [STORAGE_KEYS.autoRefreshEnabled]: true
   })
 
   assignConfig({
     mediaFilterLists: stored[STORAGE_KEYS.mediaFilterLists],
     hiddenUserIds: stored[STORAGE_KEYS.hiddenUserIds],
     hiddenWords: stored[STORAGE_KEYS.hiddenWords],
-    hiddenStatuses: stored[STORAGE_KEYS.hiddenStatuses]
+    hiddenStatuses: stored[STORAGE_KEYS.hiddenStatuses],
+    hideUIEnabled: stored[STORAGE_KEYS.hideUIEnabled],
+    autoRefreshEnabled: stored[STORAGE_KEYS.autoRefreshEnabled]
   })
 
-  // 起動時に期限切れを掃除しておくことで、判定側が毎回「有効期限」を気にせずに済む。
+  // 起動時に期限切れ投稿を取り除いておくと、古い一時非表示が残留せず再適用時の判定も単純に保てる。
   const now = Date.now()
   const before = config.hiddenStatuses.length
   config.hiddenStatuses = config.hiddenStatuses.filter(
@@ -65,9 +75,11 @@ export async function loadConfig () {
 
 /**
  * 指定キーに対応する設定だけを保存する。
- * 入力: config オブジェクト上のキー名
+ * 入力: config オブジェクト上のキー名。
  * 出力: Promise<void>
- * 主な処理内容: キー名を Tampermonkey ストレージキーへ引き直して保存する
+ * 主な処理内容:
+ * 1. STORAGE_KEYS から対応する保存キーを引く
+ * 2. Tampermonkey ストレージへその項目だけ書き込む
  */
 export async function saveKey (configKey) {
   const storageKey = STORAGE_KEYS[configKey]
@@ -75,28 +87,34 @@ export async function saveKey (configKey) {
 }
 
 /**
- * 新しい設定一式で保存内容を丸ごと置き換える。
- * 入力: 正規化済み設定オブジェクト
+ * 新しい設定一式をメモリとストレージへまとめて反映する。
+ * 入力: 完全な設定オブジェクト。
  * 出力: Promise<void>
- * 主な処理内容: メモリ上の config とストレージを同じ内容へ一括で同期する
+ * 主な処理内容:
+ * 1. config へ全項目を上書きする
+ * 2. 永続化対象の全キーをまとめて保存する
  */
 export async function replaceConfig (nextConfig) {
   assignConfig({
     mediaFilterLists: nextConfig.mediaFilterLists,
     hiddenUserIds: nextConfig.hiddenUserIds,
     hiddenWords: nextConfig.hiddenWords,
-    hiddenStatuses: nextConfig.hiddenStatuses
+    hiddenStatuses: nextConfig.hiddenStatuses,
+    hideUIEnabled: nextConfig.hideUIEnabled,
+    autoRefreshEnabled: nextConfig.autoRefreshEnabled
   })
 
   await GM_setValues({
     [STORAGE_KEYS.mediaFilterLists]: config.mediaFilterLists,
     [STORAGE_KEYS.hiddenUserIds]: config.hiddenUserIds,
     [STORAGE_KEYS.hiddenWords]: config.hiddenWords,
-    [STORAGE_KEYS.hiddenStatuses]: config.hiddenStatuses
+    [STORAGE_KEYS.hiddenStatuses]: config.hiddenStatuses,
+    [STORAGE_KEYS.hideUIEnabled]: config.hideUIEnabled,
+    [STORAGE_KEYS.autoRefreshEnabled]: config.autoRefreshEnabled
   })
 }
 
-/** メディアフィルタ対象リスト名を追加する。 */
+/** メディアフィルタ対象リストを追加する。*/
 export async function addMediaFilterList (listName) {
   if (!config.mediaFilterLists.includes(listName)) {
     config.mediaFilterLists.push(listName)
@@ -105,7 +123,7 @@ export async function addMediaFilterList (listName) {
   }
 }
 
-/** メディアフィルタ対象リスト名を削除する。 */
+/** メディアフィルタ対象リストを削除する。*/
 export async function removeMediaFilterList (listName) {
   config.mediaFilterLists = config.mediaFilterLists.filter(n => n !== listName)
   await saveKey('mediaFilterLists')
@@ -114,9 +132,11 @@ export async function removeMediaFilterList (listName) {
 
 /**
  * 非表示ユーザーを追加する。
- * 入力: @ の有無どちらでもよいユーザー ID
+ * 入力: @ の有無どちらでもよいユーザー ID。
  * 出力: Promise<void>
- * 主な処理内容: 保存形式を揃えるため、先頭の @ を除去してから重複チェックする
+ * 主な処理内容:
+ * 1. 保存時の表記ゆれを防ぐため先頭の @ を除去する
+ * 2. 重複しない場合だけ設定へ追加して保存する
  */
 export async function addHiddenUser (userId) {
   const id = userId.replace(/^@/, '')
@@ -127,7 +147,7 @@ export async function addHiddenUser (userId) {
   }
 }
 
-/** 非表示ユーザーを削除する。 */
+/** 非表示ユーザーを削除する。*/
 export async function removeHiddenUser (userId) {
   const id = userId.replace(/^@/, '')
   config.hiddenUserIds = config.hiddenUserIds.filter(user => user !== id)
@@ -137,12 +157,14 @@ export async function removeHiddenUser (userId) {
 
 /**
  * 非表示キーワードを追加する。
- * 入力: 保存したいキーワード文字列
+ * 入力: 追加したいキーワード文字列。
  * 出力: Promise<void>
- * 主な処理内容: 登録時の表記は維持しつつ、重複判定だけ大文字小文字を無視して行う
+ * 主な処理内容:
+ * 1. 大文字小文字違いの重複を防ぐため比較用に小文字化する
+ * 2. 実際の表示値は元の文字列を保持したまま保存する
  */
 export async function addHiddenWord (word) {
-  // 判定時は大文字小文字を無視する仕様なので、登録時の重複判定も同じ条件へ揃える。
+  // 比較だけを小文字化するのは、画面表示やエクスポート時に入力どおりの文字列を残すため。
   const normalizedWord = word.toLowerCase()
 
   if (!config.hiddenWords.some(item => item.toLowerCase() === normalizedWord)) {
@@ -152,7 +174,7 @@ export async function addHiddenWord (word) {
   }
 }
 
-/** 非表示キーワードを削除する。 */
+/** 非表示キーワードを削除する。*/
 export async function removeHiddenWord (word) {
   config.hiddenWords = config.hiddenWords.filter(item => item !== word)
   await saveKey('hiddenWords')
@@ -160,10 +182,12 @@ export async function removeHiddenWord (word) {
 }
 
 /**
- * 非表示投稿を期限つきで追加する。
- * 入力: 数値文字列の statusId
+ * 非表示ポストを期限付きで追加する。
+ * 入力: 数字文字列の statusId。
  * 出力: Promise<void>
- * 主な処理内容: 重複登録を避けつつ、有効期限を付けて保存する
+ * 主な処理内容:
+ * 1. 重複登録を避ける
+ * 2. 期限つきデータとして expiresAt を付けて保存する
  */
 export async function addHiddenStatus (statusId) {
   if (!config.hiddenStatuses.some(entry => entry.statusId === statusId)) {
@@ -176,7 +200,7 @@ export async function addHiddenStatus (statusId) {
   }
 }
 
-/** 非表示投稿を削除する。 */
+/** 非表示ポストを削除する。*/
 export async function removeHiddenStatus (statusId) {
   config.hiddenStatuses = config.hiddenStatuses.filter(
     entry => entry.statusId !== statusId
@@ -185,7 +209,33 @@ export async function removeHiddenStatus (statusId) {
   console.log(`[X-Observer] 非表示ポスト削除: ${statusId}`)
 }
 
-/** 現在設定をログへ安全に表示する。 */
+/** 現在の設定をログへ表示する。*/
 export function showConfig () {
   console.log('[X-Observer] 現在の設定:', JSON.parse(JSON.stringify(config)))
+}
+
+/**
+ * UI 非表示設定を更新して保存する。
+ * 入力: 非表示を有効にするかどうかの真偽値。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 真偽値へ正規化して config に反映する
+ * 2. Tampermonkey ストレージへ保存する
+ */
+export async function setHideUIEnabled (enabled) {
+  config.hideUIEnabled = Boolean(enabled)
+  await saveKey('hideUIEnabled')
+}
+
+/**
+ * 自動更新設定を更新して保存する。
+ * 入力: 自動更新を有効にするかどうかの真偽値。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 真偽値へ正規化して config に反映する
+ * 2. Tampermonkey ストレージへ保存する
+ */
+export async function setAutoRefreshEnabled (enabled) {
+  config.autoRefreshEnabled = Boolean(enabled)
+  await saveKey('autoRefreshEnabled')
 }
