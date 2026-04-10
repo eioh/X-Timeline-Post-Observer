@@ -369,6 +369,16 @@
   }
 
   /**
+   * 大文字小文字を無視して部分一致比較できる文字列へ正規化する。
+   * 入力: 比較対象の文字列
+   * 出力: 小文字化した文字列
+   * 主な処理内容: 登録値の見た目は保持したまま、判定時だけ比較条件を揃える
+   */
+  function normalizeTextForCaseInsensitiveMatch (text) {
+    return text.toLowerCase()
+  }
+
+  /**
    * 投稿情報と現在設定から、非表示にすべき理由を返す。
    * 入力: タブ名、抽出済み投稿情報、現在設定
    * 出力: 非表示理由の文字列。表示対象なら null
@@ -396,8 +406,11 @@
     }
 
     if (postInfo.text) {
+      // 登録時の表記をそのまま残したいので、保存値は変えずに比較時だけ小文字へ揃える。
+      const normalizedPostText = normalizeTextForCaseInsensitiveMatch(postInfo.text);
+
       for (const word of config.hiddenWords) {
-        if (postInfo.text.includes(word)) {
+        if (normalizedPostText.includes(normalizeTextForCaseInsensitiveMatch(word))) {
           return `hidden-word ("${word}")`
         }
       }
@@ -541,9 +554,17 @@
     console.log(`[X-Observer] 非表示ユーザー削除: @${id}`);
   }
 
-  /** 非表示キーワードを追加する。 */
+  /**
+   * 非表示キーワードを追加する。
+   * 入力: 保存したいキーワード文字列
+   * 出力: Promise<void>
+   * 主な処理内容: 登録時の表記は維持しつつ、重複判定だけ大文字小文字を無視して行う
+   */
   async function addHiddenWord (word) {
-    if (!config.hiddenWords.includes(word)) {
+    // 判定時は大文字小文字を無視する仕様なので、登録時の重複判定も同じ条件へ揃える。
+    const normalizedWord = word.toLowerCase();
+
+    if (!config.hiddenWords.some(item => item.toLowerCase() === normalizedWord)) {
       config.hiddenWords.push(word);
       await saveKey('hiddenWords');
       console.log(`[X-Observer] 非表示ワード追加: "${word}"`);
@@ -856,15 +877,50 @@
   }
 
   /**
+   * X 標準メニューへ差し込む独自 menuitem 要素を組み立てる。
+   * 入力: 一意なクラス名、表示ラベル、クリック時の処理
+   * 出力: role="menuitem" を持つ div 要素
+   * 主な処理内容: X 標準メニューへなじむ共通 DOM 構造とイベント処理をまとめる
+   */
+  function createDropdownMenuItem ({ className, label, onSelect }) {
+    const menuItem = document.createElement('div');
+    menuItem.setAttribute('role', 'menuitem');
+    menuItem.setAttribute('tabindex', '0');
+    menuItem.className = className;
+    menuItem.innerHTML = `
+    <div class="xtlo-icon">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <g>
+          <path d="M3.693 21.707l-1.414-1.414 2.429-2.429c-2.479-2.421-3.606-5.376-3.658-5.513l-.131-.352.131-.352c.133-.353 3.331-8.648 10.937-8.648 2.062 0 3.834.629 5.332 1.644l2.674-2.674 1.414 1.414L3.693 21.707zm-.622-9.706c.356.797 1.354 2.794 3.051 4.449l2.417-2.418c-.361-.609-.553-1.306-.553-2.032 0-2.206 1.794-4 4-4 .727 0 1.424.192 2.033.554l2.263-2.264C14.953 5.434 13.512 5 11.986 5c-5.416 0-8.258 5.535-8.915 7.001zM11.986 10c-1.103 0-2 .897-2 2 0 .441.144.861.41 1.207l2.798-2.797C12.847 10.144 12.427 10 11.986 10zm9.878 7.06l-1.5-1.5c1.094-1.222 1.858-2.534 2.264-3.56-.869-1.907-3.813-7.001-8.642-7.001-.796 0-1.542.124-2.238.332l-1.63-1.63C11.064 3.241 12.136 3 13.271 3c6.256 0 9.573 6.971 9.778 7.432l.151.354-.108.341c-.148.465-1.065 2.893-2.928 4.933z"></path>
+        </g>
+      </svg>
+    </div>
+    <div class="xtlo-label">${label}</div>
+  `;
+
+    menuItem.addEventListener('click', async event => {
+      event.preventDefault();
+      event.stopPropagation();
+      await onSelect(menuItem);
+    });
+
+    return menuItem
+  }
+
+  /**
    * 投稿の「...」メニューへ独自の非表示項目を注入する監視を開始する。
-   * 入力: 非表示登録関数と再適用関数
+   * 入力: 投稿・ユーザーの非表示登録関数と再適用関数
    * 出力: MutationObserver
    * 主な処理内容:
    * 1. 直前に押された caret を記録する
    * 2. menu 出現を監視する
-   * 3. 対象投稿の statusId を使って独自 menuitem を注入する
+   * 3. 対象投稿の statusId / userId を使って独自 menuitem を注入する
    */
-  function setupDropdownHideMenu ({ addHiddenStatus, reapplyFilters }) {
+  function setupDropdownHideMenu ({
+    addHiddenStatus,
+    addHiddenUser,
+    reapplyFilters
+  }) {
     // X 標準メニューは「どの投稿から開いたか」を直接渡してこないため、直前クリックを手掛かりにする。
     let lastClickedCaret = null;
 
@@ -880,56 +936,73 @@
     );
 
     /**
-     * 対象 menu へ「このポストを非表示」項目を差し込む。
+     * 対象 menu へ「このポストを非表示」「このユーザーを非表示」項目を差し込む。
      * 入力: role="menu" の要素
      * 出力: なし
-     * 主な処理内容: 直前 caret に対応する article を見つけ、クリック時に非表示登録する
+     * 主な処理内容: 直前 caret に対応する article を見つけ、投稿 ID とユーザー ID ごとの項目を追加する
      */
     function injectHideMenuItem (menu) {
-      if (menu.querySelector('.xtlo-hide-post-menuitem')) return
+      if (
+        menu.querySelector('.xtlo-hide-post-menuitem') ||
+        menu.querySelector('.xtlo-hide-user-menuitem')
+      ) {
+        return
+      }
       if (!lastClickedCaret) return
 
       const article = lastClickedCaret.closest('article');
       if (!article) return
 
       const info = extractPostInfo(article);
-      if (!info.statusId) return
+      if (!info.statusId && !info.userId) return
 
-      const menuItem = document.createElement('div');
-      menuItem.setAttribute('role', 'menuitem');
-      menuItem.setAttribute('tabindex', '0');
-      menuItem.className = 'xtlo-hide-post-menuitem';
-      menuItem.innerHTML = `
-      <div class="xtlo-icon">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <g>
-            <path d="M3.693 21.707l-1.414-1.414 2.429-2.429c-2.479-2.421-3.606-5.376-3.658-5.513l-.131-.352.131-.352c.133-.353 3.331-8.648 10.937-8.648 2.062 0 3.834.629 5.332 1.644l2.674-2.674 1.414 1.414L3.693 21.707zm-.622-9.706c.356.797 1.354 2.794 3.051 4.449l2.417-2.418c-.361-.609-.553-1.306-.553-2.032 0-2.206 1.794-4 4-4 .727 0 1.424.192 2.033.554l2.263-2.264C14.953 5.434 13.512 5 11.986 5c-5.416 0-8.258 5.535-8.915 7.001zM11.986 10c-1.103 0-2 .897-2 2 0 .441.144.861.41 1.207l2.798-2.797C12.847 10.144 12.427 10 11.986 10zm9.878 7.06l-1.5-1.5c1.094-1.222 1.858-2.534 2.264-3.56-.869-1.907-3.813-7.001-8.642-7.001-.796 0-1.542.124-2.238.332l-1.63-1.63C11.064 3.241 12.136 3 13.271 3c6.256 0 9.573 6.971 9.778 7.432l.151.354-.108.341c-.148.465-1.065 2.893-2.928 4.933z"></path>
-          </g>
-        </svg>
-      </div>
-      <div class="xtlo-label">このポストを非表示 (X-Observer)</div>
-    `;
+      if (info.userId) {
+        menu.appendChild(
+          createDropdownMenuItem({
+            className: 'xtlo-hide-user-menuitem xtlo-hide-post-menuitem',
+            label: `ユーザーを非表示 (@${info.userId})`,
+            onSelect: async menuItem => {
+              const dropdownMenu = menuItem.closest('[role="menu"]');
 
-      menuItem.addEventListener('click', async event => {
-        event.preventDefault();
-        event.stopPropagation();
+              await addHiddenUser(info.userId);
+              reapplyFilters();
 
-        const dropdownMenu = menuItem.closest('[role="menu"]');
+              if (dropdownMenu) {
+                // ユーザー追加後も X 標準メニューの閉じ方を揃え、開閉状態の不整合を避ける。
+                closeDropdownMenu(dropdownMenu);
+              }
 
-        await addHiddenStatus(info.statusId);
-        reapplyFilters();
-
-        if (dropdownMenu) {
-          // X 側のメニュー管理状態を壊さず閉じるため、DOM 削除ではなく onDismiss を呼ぶ。
-          closeDropdownMenu(dropdownMenu);
-        }
-
-        console.log(
-          `[X-Observer] メニューからポストを非表示にしました: ${info.statusId}`
+              console.log(
+                `[X-Observer] メニューからユーザーを非表示にしました: @${info.userId}`
+              );
+            }
+          })
         );
-      });
+      }
 
-      menu.appendChild(menuItem);
+      if (info.statusId) {
+        menu.appendChild(
+          createDropdownMenuItem({
+            className: 'xtlo-hide-post-menuitem',
+            label: 'ポストを非表示',
+            onSelect: async menuItem => {
+              const dropdownMenu = menuItem.closest('[role="menu"]');
+
+              await addHiddenStatus(info.statusId);
+              reapplyFilters();
+
+              if (dropdownMenu) {
+                // X 側のメニュー管理状態を壊さず閉じるため、DOM 削除ではなく onDismiss を呼ぶ。
+                closeDropdownMenu(dropdownMenu);
+              }
+
+              console.log(
+                `[X-Observer] メニューからポストを非表示にしました: ${info.statusId}`
+              );
+            }
+          })
+        );
+      }
     }
 
     // X 側メニューの構築完了前に挿入すると位置や構造が崩れるため、出現監視 + 少し遅延で差し込む。
@@ -1299,6 +1372,7 @@
 
       setupDropdownHideMenu({
         addHiddenStatus,
+        addHiddenUser,
         reapplyFilters: processor.reapplyFilters
       });
 

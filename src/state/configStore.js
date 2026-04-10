@@ -135,9 +135,17 @@ export async function removeHiddenUser (userId) {
   console.log(`[X-Observer] 非表示ユーザー削除: @${id}`)
 }
 
-/** 非表示キーワードを追加する。 */
+/**
+ * 非表示キーワードを追加する。
+ * 入力: 保存したいキーワード文字列
+ * 出力: Promise<void>
+ * 主な処理内容: 登録時の表記は維持しつつ、重複判定だけ大文字小文字を無視して行う
+ */
 export async function addHiddenWord (word) {
-  if (!config.hiddenWords.includes(word)) {
+  // 判定時は大文字小文字を無視する仕様なので、登録時の重複判定も同じ条件へ揃える。
+  const normalizedWord = word.toLowerCase()
+
+  if (!config.hiddenWords.some(item => item.toLowerCase() === normalizedWord)) {
     config.hiddenWords.push(word)
     await saveKey('hiddenWords')
     console.log(`[X-Observer] 非表示ワード追加: "${word}"`)

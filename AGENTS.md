@@ -16,6 +16,7 @@
 - 権限やネットワーク制約が絡むコマンドを実行する前は、[`doc/command-escalation.md`](./doc/command-escalation.md) を参照してください。
 - コメント追加や関数説明の粒度で迷ったら、[`doc/comment-style.md`](./doc/comment-style.md) を参照してください。
 - 実サイト依存の情報、特に DOM 構造や属性値が必要な変更では、推測で埋めずにユーザーへ確認してください。
+- コミットメッセージは `feat:` や `fix:` などの Conventional Commits スタイルで記述してください。
 
 ## 変更時に優先して守ること
 

@@ -63,6 +63,7 @@ import { exportConfigToFile, importConfigFromFile } from './state/importExport.j
 
     setupDropdownHideMenu({
       addHiddenStatus,
+      addHiddenUser,
       reapplyFilters: processor.reapplyFilters
     })
 
