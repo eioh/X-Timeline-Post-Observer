@@ -3,7 +3,19 @@
 ## 概要
 
 - このリポジトリは、X / Twitter のタイムラインを監視して投稿を非表示化する Tampermonkey 用ユーザースクリプトです。
-- 実装本体は [`src/main.js`](./src/main.js) に集約されています。複数ファイルへ分割する場合でも、Tampermonkey へ配布する最終形を意識してください。
+- 開発用の実装入口は [`src/index.js`](./src/index.js)、配布物は [`dist/main.js`](./dist/main.js) です。
+- 実装追加は `src/` 配下の機能別モジュールへ寄せ、入口ロジックは [`src/index.js`](./src/index.js) に集約してください。
+
+## ビルド
+
+- 依存導入は `npm install`、配布物生成は `npm run build`、監視ビルドは `npm run watch` です。
+- Userscript のメタデータブロックは [`rollup.config.js`](./rollup.config.js) の `banner` で付与しています。`dist/main.js` を手編集すると次回ビルドで上書きされます。
+
+## セッション運用メモ
+
+- 権限やネットワーク制約が絡むコマンドを実行する前は、[`doc/command-escalation.md`](./doc/command-escalation.md) を参照してください。
+- コメント追加や関数説明の粒度で迷ったら、[`doc/comment-style.md`](./doc/comment-style.md) を参照してください。
+- 実サイト依存の情報、特に DOM 構造や属性値が必要な変更では、推測で埋めずにユーザーへ確認してください。
 
 ## 変更時に優先して守ること
 

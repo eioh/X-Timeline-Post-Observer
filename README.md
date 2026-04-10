@@ -21,8 +21,15 @@ X / Twitter のタイムラインを監視し、指定条件に一致する投�
 ## インストール
 
 1. ブラウザに Tampermonkey を導入します。
-2. [`src/main.js`](./src/main.js) の内容を新規ユーザースクリプトとして登録します。
-3. X または Twitter を開き、スクリプトを有効化します。
+2. 開発者は `npm install` を実行し、`npm run build` で [`dist/main.js`](./dist/main.js) を生成します。
+3. [`dist/main.js`](./dist/main.js) の内容を新規ユーザースクリプトとして登録します。
+4. X または Twitter を開き、スクリプトを有効化します。
+
+## 開発
+
+- 開発用エントリポイントは [`src/index.js`](./src/index.js) です。
+- 配布物は [`dist/main.js`](./dist/main.js) です。
+- ビルドコマンドは `npm run build`、監視ビルドは `npm run watch` です。
 
 ## 使い方
 
