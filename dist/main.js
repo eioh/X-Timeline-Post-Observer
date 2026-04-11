@@ -1520,41 +1520,13 @@
 
   const PAGE_SIZE = 500;
   const TAB_DEFINITIONS = [
-    {
-      key: 'users',
-      label: 'ユーザーID',
-      placeholder: '[@]user_id'
-    },
-    {
-      key: 'follow',
-      label: 'フォロー',
-      placeholder: '[@]user_id'
-    },
-    {
-      key: 'list',
-      label: 'リスト',
-      placeholder: '[@]user_id'
-    },
-    {
-      key: 'statuses',
-      label: 'ポストID',
-      placeholder: 'post_id / URL'
-    },
-    {
-      key: 'words',
-      label: 'キーワード',
-      placeholder: 'keyword'
-    },
-    {
-      key: 'media',
-      label: 'メディア',
-      placeholder: 'リスト名'
-    },
-    {
-      key: 'settings',
-      label: '設定',
-      placeholder: ''
-    }
+    { key: 'users',    label: 'ユーザー',   placeholder: '[@]user_id',    category: 'hide' },
+    { key: 'statuses', label: 'ポスト',     placeholder: 'post_id / URL', category: 'hide' },
+    { key: 'words',    label: 'キーワード', placeholder: 'keyword',       category: 'hide' },
+    { key: 'media',    label: 'メディア',   placeholder: 'リスト名',      category: 'hide' },
+    { key: 'follow',   label: 'フォロー',   placeholder: '[@]user_id',    category: 'color' },
+    { key: 'list',     label: 'リスト',     placeholder: '[@]user_id',    category: 'color' },
+    { key: 'settings', label: '設定',       placeholder: '',              category: 'settings' }
   ];
 
   const DIALOG_STYLE = `
@@ -1611,13 +1583,17 @@
 
   .xtlo-settings-tabs {
     display: flex;
-    gap: 18px;
+    align-items: stretch;
+    gap: 14px;
     padding: 0 20px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   }
 
   .xtlo-settings-tab {
     position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     padding: 8px 0 10px;
     border: 0;
     background: transparent;
@@ -1625,6 +1601,26 @@
     font-size: 13px;
     font-weight: 700;
     cursor: pointer;
+  }
+
+  .xtlo-settings-tab-icon {
+    display: inline-flex;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+
+  .xtlo-settings-tab-icon svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .xtlo-settings-tab-separator {
+    width: 1px;
+    align-self: stretch;
+    margin: 8px 0;
+    background: rgba(255, 255, 255, 0.14);
+    flex-shrink: 0;
   }
 
   .xtlo-settings-tab[data-active="true"] {
@@ -1917,8 +1913,12 @@
     }
 
     .xtlo-settings-tabs {
-      gap: 20px;
+      gap: 10px;
       overflow: auto;
+    }
+
+    .xtlo-settings-tab-separator {
+      margin: 10px 0;
     }
 
     .xtlo-settings-add-row,
@@ -2231,9 +2231,33 @@
       `
       }
 
-      if (tabKey === 'follow') {
+      if (tabKey === 'statuses') {
+        return `
+        <svg viewBox="0 -1 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M20 4H4a2 2 0 0 0-2 2v12l4-4h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm-2 8H6v-2h12zm0-3H6V7h12z"/>
+        </svg>
+      `
+      }
+
+      if (tabKey === 'words') {
         return `
         <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M5 5h14v3h-5v12h-4V8H5z"/>
+        </svg>
+      `
+      }
+
+      if (tabKey === 'media') {
+        return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M4 6h16v12H4zm2 2v8h12V8zm2 1h4v2H8zm0 3h8v2H8z"/>
+        </svg>
+      `
+      }
+
+      if (tabKey === 'follow') {
+        return `
+        <svg viewBox="0 -2 24 24" aria-hidden="true">
           <path fill="currentColor" d="M17 7a3 3 0 1 1-3-3 3 3 0 0 1 3 3zm-8 1a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm5 2c-2.33 0-7 1.17-7 3.5V16h14v-2.5C21 11.17 16.33 10 14 10zm-5 1c-2.67 0-8 1.34-8 4v1h4v-2.5c0-.9.37-1.72 1.03-2.4A12.7 12.7 0 0 1 9 11z"/>
         </svg>
       `
@@ -2247,25 +2271,17 @@
       `
       }
 
-      if (tabKey === 'statuses') {
+      if (tabKey === 'settings') {
         return `
         <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path fill="currentColor" d="M6 5h12v2H6zm0 6h12v2H6zm0 6h8v2H6z"/>
-        </svg>
-      `
-      }
-
-      if (tabKey === 'words') {
-        return `
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path fill="currentColor" d="M5 5h14v2H5zm0 4h14v2H5zm0 4h9v2H5zm0 4h7v2H5z"/>
+          <path fill="currentColor" d="M19.14 12.94a7.49 7.49 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a7.3 7.3 0 0 0-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L2.67 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.49 7.49 0 0 0 0 1.88L2.79 14.52a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.38 1.05.7 1.62.94l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54c.57-.24 1.12-.56 1.62-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64zM12 15.5A3.5 3.5 0 1 1 15.5 12 3.5 3.5 0 0 1 12 15.5z"/>
         </svg>
       `
       }
 
       return `
       <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path fill="currentColor" d="M4 6h16v12H4zm2 2v8h12V8zm2 1h4v2H8zm0 3h8v2H8z"/>
+        <path fill="currentColor" d="M4 6h16v12H4zm2 2v8h12V8z"/>
       </svg>
     `
     }
@@ -2617,11 +2633,13 @@
           <button class="xtlo-settings-close" aria-label="閉じる">×</button>
         </div>
         <div class="xtlo-settings-tabs">
-          ${TAB_DEFINITIONS.map(
-            tab => `
-              <button class="xtlo-settings-tab" data-tab="${tab.key}" data-active="false">${tab.label}</button>
-            `
-          ).join('')}
+          ${TAB_DEFINITIONS.map((tab, index) => {
+            const prev = TAB_DEFINITIONS[index - 1];
+            const separator = prev && prev.category !== tab.category
+              ? '<div class="xtlo-settings-tab-separator" aria-hidden="true"></div>'
+              : '';
+            return `${separator}<button class="xtlo-settings-tab" data-tab="${tab.key}" data-active="false"><span class="xtlo-settings-tab-icon">${getListIcon(tab.key)}</span><span class="xtlo-settings-tab-label">${tab.label}</span></button>`
+          }).join('')}
         </div>
         <div class="xtlo-settings-body"></div>
         <div class="xtlo-settings-footer"></div>
