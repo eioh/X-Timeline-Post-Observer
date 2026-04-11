@@ -14,6 +14,8 @@ export function createExportData () {
     version: EXPORT_VERSION,
     mediaFilterLists: [...config.mediaFilterLists],
     hiddenUserIds: [...config.hiddenUserIds],
+    followUserIds: [...config.followUserIds],
+    listUserIds: [...config.listUserIds],
     hiddenWords: [...config.hiddenWords],
     hiddenStatuses: config.hiddenStatuses.map(entry => ({
       statusId: entry.statusId,
@@ -40,15 +42,24 @@ export function normalizeImportedConfig (raw) {
     throw new Error('設定 JSON のルートはオブジェクトである必要があります')
   }
 
-  if (![1, EXPORT_VERSION].includes(raw.version)) {
+  if (![1, 2, EXPORT_VERSION].includes(raw.version)) {
     throw new Error(`未対応の設定バージョンです: ${raw.version}`)
   }
 
-  const { mediaFilterLists, hiddenUserIds, hiddenWords, hiddenStatuses } = raw
+  const {
+    mediaFilterLists,
+    hiddenUserIds,
+    hiddenWords,
+    hiddenStatuses
+  } = raw
+  const followUserIds = raw.version >= 3 ? raw.followUserIds : []
+  const listUserIds = raw.version >= 3 ? raw.listUserIds : []
 
   if (
     !Array.isArray(mediaFilterLists) ||
     !Array.isArray(hiddenUserIds) ||
+    !Array.isArray(followUserIds) ||
+    !Array.isArray(listUserIds) ||
     !Array.isArray(hiddenWords) ||
     !Array.isArray(hiddenStatuses)
   ) {
@@ -87,6 +98,20 @@ export function normalizeImportedConfig (raw) {
     hiddenUserIds: [
       ...new Set(
         hiddenUserIds
+          .filter(item => typeof item === 'string')
+          .map(item => item.replace(/^@/, ''))
+      )
+    ],
+    followUserIds: [
+      ...new Set(
+        followUserIds
+          .filter(item => typeof item === 'string')
+          .map(item => item.replace(/^@/, ''))
+      )
+    ],
+    listUserIds: [
+      ...new Set(
+        listUserIds
           .filter(item => typeof item === 'string')
           .map(item => item.replace(/^@/, ''))
       )

@@ -37,13 +37,15 @@
 
   // 設定 JSON の互換性判定に使う形式バージョン。
   // 形式変更時は import 側の検証と必ずセットで更新する。
-  const EXPORT_VERSION = 2;
+  const EXPORT_VERSION = 3;
 
   // Tampermonkey ストレージの保存キー一覧。
   // モジュール分割後もキー名を散らさず、互換性影響をここで追えるようにしている。
   const STORAGE_KEYS = {
     mediaFilterLists: 'xtlo_mediaFilterLists',
     hiddenUserIds: 'xtlo_hiddenUserIds',
+    followUserIds: 'xtlo_followUserIds',
+    listUserIds: 'xtlo_listUserIds',
     hiddenWords: 'xtlo_hiddenWords',
     hiddenStatuses: 'xtlo_hiddenStatuses',
     hideUIEnabled: 'xtlo_hideUIEnabled',
@@ -407,6 +409,163 @@
     }
   }
 
+  const FOLLOW_LABEL_CLASS = 'xtlo-user-label-follow';
+  const LIST_LABEL_CLASS = 'xtlo-user-label-list';
+  const USER_LABEL_CSS = `
+  .${FOLLOW_LABEL_CLASS} {
+    color: #1d9bf0 !important;
+  }
+
+  .${LIST_LABEL_CLASS} {
+    color: #33c46a !important;
+  }
+`;
+
+  let styleInjected = false;
+
+  /**
+   * ユーザー分類ラベル用のスタイルを一度だけ挿入する。
+   * 入力: なし
+   * 出力: なし
+   * 主な処理内容:
+   * 1. フォロー用とリストイン用の色を定義する
+   * 2. 多重挿入を防ぐ
+   */
+  function applyUserLabelStyles () {
+    if (styleInjected) return
+
+    GM_addStyle(USER_LABEL_CSS);
+    styleInjected = true;
+  }
+
+  /**
+   * 設定から対象ユーザーの色分類を返す。
+   * 入力: ユーザー ID、現在設定
+   * 出力: follow / list / null
+   * 主な処理内容:
+   * 1. フォロー分類を最優先する
+   * 2. どちらにも無い場合は null を返す
+   */
+  function getUserLabelType (userId, config) {
+    if (!userId) return null
+
+    if (config.followUserIds.includes(userId)) {
+      return 'follow'
+    }
+
+    if (config.listUserIds.includes(userId)) {
+      return 'list'
+    }
+
+    return null
+  }
+
+  /**
+   * プロフィール系リンクかどうかを userId 基準で判定する。
+   * 入力: href 文字列、対象 userId
+   * 出力: 一致時 true
+   * 主な処理内容:
+   * 1. /<userId> または /<userId>/status/... を受け入れる
+   * 2. クエリやハッシュ付きリンクも拾う
+   */
+  function isUserProfileLink (href, userId) {
+    return (
+      href === `/${userId}` ||
+      href.startsWith(`/${userId}/`) ||
+      href.startsWith(`/${userId}?`) ||
+      href.startsWith(`/${userId}#`)
+    )
+  }
+
+  /**
+   * ユーザー ID 表示用の span をリンク内から探す。
+   * 入力: プロフィールリンク要素、対象 userId
+   * 出力: マッチした span 要素、無ければ null
+   * 主な処理内容:
+   * 1. @userId と完全一致する表示だけを対象にする
+   * 2. displayName 側を誤って着色しない
+   */
+  function findUserIdSpan (link, userId) {
+    const expectedText = `@${userId}`;
+    const spans = link.querySelectorAll('span');
+
+    for (const span of spans) {
+      const text = span.textContent?.trim().replace(/\u200b/g, '');
+      if (text === expectedText) {
+        return span
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * コンテナ内の既存分類クラスを除去する。
+   * 入力: article または引用カードの要素
+   * 出力: なし
+   * 主な処理内容:
+   * 1. 再適用時に古い色が残らないようクラスを外す
+   */
+  function clearUserLabelClasses (container) {
+    container
+      .querySelectorAll(`.${FOLLOW_LABEL_CLASS}, .${LIST_LABEL_CLASS}`)
+      .forEach(element => {
+        element.classList.remove(FOLLOW_LABEL_CLASS, LIST_LABEL_CLASS);
+      });
+  }
+
+  /**
+   * 対象コンテナ内で特定ユーザーの @userId 表示へ色分類を反映する。
+   * 入力: 描画対象コンテナ、ユーザー ID、分類
+   * 出力: なし
+   * 主な処理内容:
+   * 1. 対応するプロフィールリンクを探す
+   * 2. @userId 表示用 span へ分類クラスを付ける
+   */
+  function applyLabelToUserInContainer (container, userId, labelType) {
+    if (!userId || !labelType) return
+
+    const className =
+      labelType === 'follow' ? FOLLOW_LABEL_CLASS : LIST_LABEL_CLASS;
+    const links = container.querySelectorAll('a[href^="/"]');
+
+    for (const link of links) {
+      const href = link.getAttribute('href') || '';
+      if (!isUserProfileLink(href, userId)) {
+        continue
+      }
+
+      const userIdSpan = findUserIdSpan(link, userId);
+      if (userIdSpan) {
+        userIdSpan.classList.add(className);
+      }
+    }
+  }
+
+  /**
+   * 投稿内のユーザー ID 表示へ分類色を反映する。
+   * 入力: article 要素、抽出済み投稿情報、現在設定
+   * 出力: なし
+   * 主な処理内容:
+   * 1. 既存の色クラスを消してから再適用する
+   * 2. 本文側と引用側それぞれの userId を個別に着色する
+   */
+  function applyUserLabelsToArticle (article, postInfo, config) {
+    clearUserLabelClasses(article);
+
+    const mainLabelType = getUserLabelType(postInfo.userId, config);
+    applyLabelToUserInContainer(article, postInfo.userId, mainLabelType);
+
+    const quoteContainer = article.querySelector('div[role="link"][tabindex="0"]');
+    if (!quoteContainer || !postInfo.quote?.userId) {
+      return
+    }
+
+    const quoteLabelType = getUserLabelType(postInfo.quote.userId, config);
+    clearUserLabelClasses(quoteContainer);
+    applyLabelToUserInContainer(quoteContainer, postInfo.quote.userId, quoteLabelType);
+  }
+
   /**
    * 大文字小文字を無視して部分一致比較できる文字列へ正規化する。
    * 入力: 比較対象の文字列
@@ -463,6 +622,8 @@
   const config = {
     mediaFilterLists: [],
     hiddenUserIds: [],
+    followUserIds: [],
+    listUserIds: [],
     hiddenWords: [],
     hiddenStatuses: [],
     hideUIEnabled: true,
@@ -480,6 +641,8 @@
   function assignConfig (nextConfig) {
     config.mediaFilterLists = nextConfig.mediaFilterLists;
     config.hiddenUserIds = nextConfig.hiddenUserIds;
+    config.followUserIds = nextConfig.followUserIds;
+    config.listUserIds = nextConfig.listUserIds;
     config.hiddenWords = nextConfig.hiddenWords;
     config.hiddenStatuses = nextConfig.hiddenStatuses;
     config.hideUIEnabled = nextConfig.hideUIEnabled;
@@ -499,6 +662,8 @@
     const stored = await GM_getValues({
       [STORAGE_KEYS.mediaFilterLists]: [],
       [STORAGE_KEYS.hiddenUserIds]: [],
+      [STORAGE_KEYS.followUserIds]: [],
+      [STORAGE_KEYS.listUserIds]: [],
       [STORAGE_KEYS.hiddenWords]: [],
       [STORAGE_KEYS.hiddenStatuses]: [],
       [STORAGE_KEYS.hideUIEnabled]: true,
@@ -508,6 +673,8 @@
     assignConfig({
       mediaFilterLists: stored[STORAGE_KEYS.mediaFilterLists],
       hiddenUserIds: stored[STORAGE_KEYS.hiddenUserIds],
+      followUserIds: stored[STORAGE_KEYS.followUserIds],
+      listUserIds: stored[STORAGE_KEYS.listUserIds],
       hiddenWords: stored[STORAGE_KEYS.hiddenWords],
       hiddenStatuses: stored[STORAGE_KEYS.hiddenStatuses],
       hideUIEnabled: stored[STORAGE_KEYS.hideUIEnabled],
@@ -556,6 +723,8 @@
     assignConfig({
       mediaFilterLists: nextConfig.mediaFilterLists,
       hiddenUserIds: nextConfig.hiddenUserIds,
+      followUserIds: nextConfig.followUserIds,
+      listUserIds: nextConfig.listUserIds,
       hiddenWords: nextConfig.hiddenWords,
       hiddenStatuses: nextConfig.hiddenStatuses,
       hideUIEnabled: nextConfig.hideUIEnabled,
@@ -565,6 +734,8 @@
     await GM_setValues({
       [STORAGE_KEYS.mediaFilterLists]: config.mediaFilterLists,
       [STORAGE_KEYS.hiddenUserIds]: config.hiddenUserIds,
+      [STORAGE_KEYS.followUserIds]: config.followUserIds,
+      [STORAGE_KEYS.listUserIds]: config.listUserIds,
       [STORAGE_KEYS.hiddenWords]: config.hiddenWords,
       [STORAGE_KEYS.hiddenStatuses]: config.hiddenStatuses,
       [STORAGE_KEYS.hideUIEnabled]: config.hideUIEnabled,
@@ -589,6 +760,38 @@
   }
 
   /**
+   * ユーザー ID を保存用の書式へ正規化する。
+   * 入力: @ の有無どちらでもよいユーザー ID。
+   * 出力: 先頭の @ を除去したユーザー ID。
+   * 主な処理内容:
+   * 1. 手入力と自動取得で形式を揃える
+   * 2. 末尾空白も除去して重複判定を安定させる
+   */
+  function normalizeUserId (userId) {
+    return userId.trim().replace(/^@/, '')
+  }
+
+  /**
+   * 指定した分類へユーザー ID を追加する。
+   * 入力: 保存先キー、ユーザー ID、ログ用分類名。
+   * 出力: 追加できた場合は true、既存なら false。
+   * 主な処理内容:
+   * 1. 先頭の @ を除去して比較用の形式へ揃える
+   * 2. 未登録時だけ配列へ追加して保存を予約する
+   */
+  function rememberClassifiedUser (configKey, userId, label) {
+    const id = normalizeUserId(userId);
+    if (!id || config[configKey].includes(id)) {
+      return false
+    }
+
+    config[configKey].push(id);
+    void saveKey(configKey);
+    console.log(`[X-Observer] ${label}ユーザー追加: @${id}`);
+    return true
+  }
+
+  /**
    * 非表示ユーザーを追加する。
    * 入力: @ の有無どちらでもよいユーザー ID。
    * 出力: Promise<void>
@@ -597,7 +800,7 @@
    * 2. 重複しない場合だけ設定へ追加して保存する
    */
   async function addHiddenUser (userId) {
-    const id = userId.replace(/^@/, '');
+    const id = normalizeUserId(userId);
     if (!config.hiddenUserIds.includes(id)) {
       config.hiddenUserIds.push(id);
       await saveKey('hiddenUserIds');
@@ -607,10 +810,85 @@
 
   /** 非表示ユーザーを削除する。*/
   async function removeHiddenUser (userId) {
-    const id = userId.replace(/^@/, '');
+    const id = normalizeUserId(userId);
     config.hiddenUserIds = config.hiddenUserIds.filter(user => user !== id);
     await saveKey('hiddenUserIds');
     console.log(`[X-Observer] 非表示ユーザー削除: @${id}`);
+  }
+
+  /**
+   * フォローユーザーを追加する。
+   * 入力: @ の有無どちらでもよいユーザー ID。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. 保存形式へ正規化して重複を避ける
+   * 2. ストレージへ保存して後続表示へ使えるようにする
+   */
+  async function addFollowUser (userId) {
+    const id = normalizeUserId(userId);
+    if (!config.followUserIds.includes(id)) {
+      config.followUserIds.push(id);
+      await saveKey('followUserIds');
+      console.log(`[X-Observer] フォローユーザー追加: @${id}`);
+    }
+  }
+
+  /** フォローユーザーを削除する。*/
+  async function removeFollowUser (userId) {
+    const id = normalizeUserId(userId);
+    config.followUserIds = config.followUserIds.filter(user => user !== id);
+    await saveKey('followUserIds');
+    console.log(`[X-Observer] フォローユーザー削除: @${id}`);
+  }
+
+  /**
+   * リストインユーザーを追加する。
+   * 入力: @ の有無どちらでもよいユーザー ID。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. 保存形式へ正規化して重複を避ける
+   * 2. ストレージへ保存して後続表示へ使えるようにする
+   */
+  async function addListUser (userId) {
+    const id = normalizeUserId(userId);
+    if (!config.listUserIds.includes(id)) {
+      config.listUserIds.push(id);
+      await saveKey('listUserIds');
+      console.log(`[X-Observer] リストインユーザー追加: @${id}`);
+    }
+  }
+
+  /** リストインユーザーを削除する。*/
+  async function removeListUser (userId) {
+    const id = normalizeUserId(userId);
+    config.listUserIds = config.listUserIds.filter(user => user !== id);
+    await saveKey('listUserIds');
+    console.log(`[X-Observer] リストインユーザー削除: @${id}`);
+  }
+
+  /**
+   * 自動判定した分類ユーザーを保存する。
+   * 入力: タイムライン文脈、ユーザー ID、リポストかどうか。
+   * 出力: 新規追加が発生した場合は true、不要なら false。
+   * 主な処理内容:
+   * 1. リポストや userId なしを除外する
+   * 2. [フォロー中] はフォローとして記録する
+   * 3. [おすすめ] 以外のタブはリストインとして記録する
+   */
+  function learnClassifiedUserFromTab (tabName, userId, isRepost) {
+    if (!userId || isRepost) {
+      return false
+    }
+
+    if (tabName === 'フォロー中') {
+      return rememberClassifiedUser('followUserIds', userId, 'フォロー')
+    }
+
+    if (tabName && tabName !== 'おすすめ') {
+      return rememberClassifiedUser('listUserIds', userId, 'リストイン')
+    }
+
+    return false
   }
 
   /**
@@ -764,11 +1042,16 @@
       if (articles.length === 0) return
 
       const tabName = getActiveTabName();
+      let didLearnClassifiedUser = false;
 
       articles.forEach(article => {
         article.setAttribute(PROCESSED_ATTR, 'true');
 
         const info = extractPostInfo(article);
+        if (learnClassifiedUserFromTab(tabName, info.userId, info.isRepost)) {
+          didLearnClassifiedUser = true;
+        }
+        applyUserLabelsToArticle(article, info, config);
         if (!info.statusId) return
 
         console.log('[X-Observer]', { tab: tabName, ...info });
@@ -779,6 +1062,10 @@
           console.log(`[X-Observer] 非表示: ${hideReason}`, info.statusId);
         }
       });
+
+      if (didLearnClassifiedUser) {
+        reapplyFilters();
+      }
     }
 
     /**
@@ -790,6 +1077,7 @@
     function handleLateMedia (article) {
       const tabName = getActiveTabName();
       const info = extractPostInfo(article);
+      applyUserLabelsToArticle(article, info, config);
       if (!info.statusId) return
 
       console.log('[X-Observer] メディア遅延検出、再判定:', {
@@ -821,6 +1109,7 @@
 
       articles.forEach(article => {
         const info = extractPostInfo(article);
+        applyUserLabelsToArticle(article, info, config);
         if (!info.statusId) return
 
         const hideReason = shouldHide(tabName, info, config);
@@ -1036,6 +1325,8 @@
   function setupDropdownHideMenu ({
     addHiddenStatus,
     addHiddenUser,
+    addFollowUser,
+    addListUser,
     reapplyFilters
   }) {
     // X 標準メニューは「どの投稿から開いたか」を直接渡してこないため、直前クリックを手掛かりにする。
@@ -1074,6 +1365,48 @@
       if (!info.statusId && !info.userId) return
 
       if (info.userId) {
+        menu.appendChild(
+          createDropdownMenuItem({
+            className: 'xtlo-hide-post-menuitem',
+            label: `フォローとして追加 (@${info.userId})`,
+            onSelect: async menuItem => {
+              const dropdownMenu = menuItem.closest('[role="menu"]');
+
+              await addFollowUser(info.userId);
+              reapplyFilters();
+
+              if (dropdownMenu) {
+                closeDropdownMenu(dropdownMenu);
+              }
+
+              console.log(
+                `[X-Observer] メニューからフォローユーザーを追加しました: @${info.userId}`
+              );
+            }
+          })
+        );
+
+        menu.appendChild(
+          createDropdownMenuItem({
+            className: 'xtlo-hide-post-menuitem',
+            label: `リストインとして追加 (@${info.userId})`,
+            onSelect: async menuItem => {
+              const dropdownMenu = menuItem.closest('[role="menu"]');
+
+              await addListUser(info.userId);
+              reapplyFilters();
+
+              if (dropdownMenu) {
+                closeDropdownMenu(dropdownMenu);
+              }
+
+              console.log(
+                `[X-Observer] メニューからリストインユーザーを追加しました: @${info.userId}`
+              );
+            }
+          })
+        );
+
         menu.appendChild(
           createDropdownMenuItem({
             className: 'xtlo-hide-user-menuitem xtlo-hide-post-menuitem',
@@ -1182,6 +1515,7 @@
   function applyBaseStyles () {
     GM_addStyle(COMPACT_LAYOUT_CSS);
     GM_addStyle(CUSTOM_MENU_CSS);
+    applyUserLabelStyles();
   }
 
   const PAGE_SIZE = 500;
@@ -1189,6 +1523,16 @@
     {
       key: 'users',
       label: 'ユーザーID',
+      placeholder: '[@]user_id'
+    },
+    {
+      key: 'follow',
+      label: 'フォロー',
+      placeholder: '[@]user_id'
+    },
+    {
+      key: 'list',
+      label: 'リスト',
       placeholder: '[@]user_id'
     },
     {
@@ -1643,6 +1987,22 @@
       }))
     }
 
+    if (tabKey === 'follow') {
+      return config.followUserIds.map(value => ({
+        value,
+        title: `@${value}`,
+        subtitle: 'フォローユーザー'
+      }))
+    }
+
+    if (tabKey === 'list') {
+      return config.listUserIds.map(value => ({
+        value,
+        title: `@${value}`,
+        subtitle: 'リストインユーザー'
+      }))
+    }
+
     if (tabKey === 'statuses') {
       return config.hiddenStatuses.map(entry => ({
         value: entry.statusId,
@@ -1680,6 +2040,10 @@
     removeHiddenStatus,
     addHiddenUser,
     removeHiddenUser,
+    addFollowUser,
+    removeFollowUser,
+    addListUser,
+    removeListUser,
     addHiddenWord,
     removeHiddenWord,
     addMediaFilterList,
@@ -1697,6 +2061,8 @@
     let currentTab = 'users';
     const pageByTab = {
       users: 1,
+      follow: 1,
+      list: 1,
       statuses: 1,
       words: 1,
       media: 1,
@@ -1736,6 +2102,42 @@
           clearAll: async () => {
             for (const value of [...config.hiddenUserIds]) {
               await removeHiddenUser(value);
+            }
+            reapplyFilters();
+          },
+          normalizeInput: value => value.replace(/^@/, '')
+        }
+      }
+
+      if (tabKey === 'follow') {
+        return {
+          items: getItemsForTab(tabKey),
+          addLabel: 'Add',
+          clearLabel: 'Clear all follows',
+          totalLabel: 'Known Users',
+          addItem: async value => addFollowUser(value),
+          removeItem: async value => removeFollowUser(value),
+          clearAll: async () => {
+            for (const value of [...config.followUserIds]) {
+              await removeFollowUser(value);
+            }
+            reapplyFilters();
+          },
+          normalizeInput: value => value.replace(/^@/, '')
+        }
+      }
+
+      if (tabKey === 'list') {
+        return {
+          items: getItemsForTab(tabKey),
+          addLabel: 'Add',
+          clearLabel: 'Clear all lists',
+          totalLabel: 'Known Users',
+          addItem: async value => addListUser(value),
+          removeItem: async value => removeListUser(value),
+          clearAll: async () => {
+            for (const value of [...config.listUserIds]) {
+              await removeListUser(value);
             }
             reapplyFilters();
           },
@@ -1825,6 +2227,22 @@
         return `
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path fill="currentColor" d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-7 2-7 4.5V20h14v-1.5C19 16 16 14 12 14z"/>
+        </svg>
+      `
+      }
+
+      if (tabKey === 'follow') {
+        return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M17 7a3 3 0 1 1-3-3 3 3 0 0 1 3 3zm-8 1a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm5 2c-2.33 0-7 1.17-7 3.5V16h14v-2.5C21 11.17 16.33 10 14 10zm-5 1c-2.67 0-8 1.34-8 4v1h4v-2.5c0-.9.37-1.72 1.03-2.4A12.7 12.7 0 0 1 9 11z"/>
+        </svg>
+      `
+      }
+
+      if (tabKey === 'list') {
+        return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M4 6h3v3H4zm0 5h3v3H4zm0 5h3v3H4zm5-10h11v3H9zm0 5h11v3H9zm0 5h11v3H9z"/>
         </svg>
       `
       }
@@ -2347,6 +2765,8 @@
   function registerMenuCommands ({
     addHiddenStatus,
     addHiddenUser,
+    addFollowUser,
+    addListUser,
     addHiddenWord,
     exportConfigToFile,
     importConfigFromFile,
@@ -2367,6 +2787,32 @@
       }
 
       await addHiddenUser(userId);
+      reapplyFilters();
+    });
+
+    GM_registerMenuCommand('フォローユーザーIDを追加', async () => {
+      const userId = normalizePromptInput(
+        prompt('フォローとして記録したいユーザー ID を入力してください。@ あり/なしどちらでも構いません')
+      );
+      if (!userId) {
+        console.log('[X-Observer] 空のフォローユーザー ID 入力はキャンセルしました');
+        return
+      }
+
+      await addFollowUser(userId);
+      reapplyFilters();
+    });
+
+    GM_registerMenuCommand('リストインユーザーIDを追加', async () => {
+      const userId = normalizePromptInput(
+        prompt('リストインとして記録したいユーザー ID を入力してください。@ あり/なしどちらでも構いません')
+      );
+      if (!userId) {
+        console.log('[X-Observer] 空のリストインユーザー ID 入力はキャンセルしました');
+        return
+      }
+
+      await addListUser(userId);
       reapplyFilters();
     });
 
@@ -2424,6 +2870,8 @@
       version: EXPORT_VERSION,
       mediaFilterLists: [...config.mediaFilterLists],
       hiddenUserIds: [...config.hiddenUserIds],
+      followUserIds: [...config.followUserIds],
+      listUserIds: [...config.listUserIds],
       hiddenWords: [...config.hiddenWords],
       hiddenStatuses: config.hiddenStatuses.map(entry => ({
         statusId: entry.statusId,
@@ -2450,15 +2898,24 @@
       throw new Error('設定 JSON のルートはオブジェクトである必要があります')
     }
 
-    if (![1, EXPORT_VERSION].includes(raw.version)) {
+    if (![1, 2, EXPORT_VERSION].includes(raw.version)) {
       throw new Error(`未対応の設定バージョンです: ${raw.version}`)
     }
 
-    const { mediaFilterLists, hiddenUserIds, hiddenWords, hiddenStatuses } = raw;
+    const {
+      mediaFilterLists,
+      hiddenUserIds,
+      hiddenWords,
+      hiddenStatuses
+    } = raw;
+    const followUserIds = raw.version >= 3 ? raw.followUserIds : [];
+    const listUserIds = raw.version >= 3 ? raw.listUserIds : [];
 
     if (
       !Array.isArray(mediaFilterLists) ||
       !Array.isArray(hiddenUserIds) ||
+      !Array.isArray(followUserIds) ||
+      !Array.isArray(listUserIds) ||
       !Array.isArray(hiddenWords) ||
       !Array.isArray(hiddenStatuses)
     ) {
@@ -2497,6 +2954,20 @@
       hiddenUserIds: [
         ...new Set(
           hiddenUserIds
+            .filter(item => typeof item === 'string')
+            .map(item => item.replace(/^@/, ''))
+        )
+      ],
+      followUserIds: [
+        ...new Set(
+          followUserIds
+            .filter(item => typeof item === 'string')
+            .map(item => item.replace(/^@/, ''))
+        )
+      ],
+      listUserIds: [
+        ...new Set(
+          listUserIds
             .filter(item => typeof item === 'string')
             .map(item => item.replace(/^@/, ''))
         )
@@ -2666,6 +3137,10 @@
         removeHiddenStatus,
         addHiddenUser,
         removeHiddenUser,
+        addFollowUser,
+        removeFollowUser,
+        addListUser,
+        removeListUser,
         addHiddenWord,
         removeHiddenWord,
         addMediaFilterList,
@@ -2682,6 +3157,8 @@
       registerMenuCommands({
         addHiddenStatus,
         addHiddenUser,
+        addFollowUser,
+        addListUser,
         addHiddenWord,
         exportConfigToFile,
         importConfigFromFile: importConfig,
@@ -2692,6 +3169,8 @@
       setupDropdownHideMenu({
         addHiddenStatus,
         addHiddenUser,
+        addFollowUser,
+        addListUser,
         reapplyFilters: processor.reapplyFilters
       });
 
@@ -2708,6 +3187,10 @@
         removeMediaFilterList,
         addHiddenUser,
         removeHiddenUser,
+        addFollowUser,
+        removeFollowUser,
+        addListUser,
+        removeListUser,
         addHiddenWord,
         removeHiddenWord,
         addHiddenStatus,

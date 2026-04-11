@@ -11,15 +11,19 @@ import {
 import { createSettingsDialog } from './features/settingsDialog.js'
 import { registerMenuCommands } from './features/tampermonkeyMenu.js'
 import {
+  addFollowUser,
   addHiddenStatus,
   addHiddenUser,
   addHiddenWord,
+  addListUser,
   addMediaFilterList,
   config,
   loadConfig,
+  removeFollowUser,
   removeHiddenStatus,
   removeHiddenUser,
   removeHiddenWord,
+  removeListUser,
   removeMediaFilterList,
   setAutoRefreshEnabled,
   setHideUIEnabled,
@@ -98,6 +102,10 @@ import { exportConfigToFile, importConfigFromFile } from './state/importExport.j
       removeHiddenStatus,
       addHiddenUser,
       removeHiddenUser,
+      addFollowUser,
+      removeFollowUser,
+      addListUser,
+      removeListUser,
       addHiddenWord,
       removeHiddenWord,
       addMediaFilterList,
@@ -114,6 +122,8 @@ import { exportConfigToFile, importConfigFromFile } from './state/importExport.j
     registerMenuCommands({
       addHiddenStatus,
       addHiddenUser,
+      addFollowUser,
+      addListUser,
       addHiddenWord,
       exportConfigToFile,
       importConfigFromFile: importConfig,
@@ -124,6 +134,8 @@ import { exportConfigToFile, importConfigFromFile } from './state/importExport.j
     setupDropdownHideMenu({
       addHiddenStatus,
       addHiddenUser,
+      addFollowUser,
+      addListUser,
       reapplyFilters: processor.reapplyFilters
     })
 
@@ -140,6 +152,10 @@ import { exportConfigToFile, importConfigFromFile } from './state/importExport.j
       removeMediaFilterList,
       addHiddenUser,
       removeHiddenUser,
+      addFollowUser,
+      removeFollowUser,
+      addListUser,
+      removeListUser,
       addHiddenWord,
       removeHiddenWord,
       addHiddenStatus,

@@ -1,7 +1,8 @@
 import { HIDDEN_ATTR, PROCESSED_ATTR } from '../constants.js'
 import { extractPostInfo, getActiveTabName } from '../extractors/postExtractor.js'
+import { applyUserLabelsToArticle } from '../features/userLabelColors.js'
 import { shouldHide } from '../filters/shouldHide.js'
-import { config } from '../state/configStore.js'
+import { config, learnClassifiedUserFromTab } from '../state/configStore.js'
 import { hideArticle, unhideArticle } from './articleVisibility.js'
 
 /**
@@ -24,11 +25,16 @@ export function createProcessor () {
     if (articles.length === 0) return
 
     const tabName = getActiveTabName()
+    let didLearnClassifiedUser = false
 
     articles.forEach(article => {
       article.setAttribute(PROCESSED_ATTR, 'true')
 
       const info = extractPostInfo(article)
+      if (learnClassifiedUserFromTab(tabName, info.userId, info.isRepost)) {
+        didLearnClassifiedUser = true
+      }
+      applyUserLabelsToArticle(article, info, config)
       if (!info.statusId) return
 
       console.log('[X-Observer]', { tab: tabName, ...info })
@@ -39,6 +45,10 @@ export function createProcessor () {
         console.log(`[X-Observer] 非表示: ${hideReason}`, info.statusId)
       }
     })
+
+    if (didLearnClassifiedUser) {
+      reapplyFilters()
+    }
   }
 
   /**
@@ -50,6 +60,7 @@ export function createProcessor () {
   function handleLateMedia (article) {
     const tabName = getActiveTabName()
     const info = extractPostInfo(article)
+    applyUserLabelsToArticle(article, info, config)
     if (!info.statusId) return
 
     console.log('[X-Observer] メディア遅延検出、再判定:', {
@@ -81,6 +92,7 @@ export function createProcessor () {
 
     articles.forEach(article => {
       const info = extractPostInfo(article)
+      applyUserLabelsToArticle(article, info, config)
       if (!info.statusId) return
 
       const hideReason = shouldHide(tabName, info, config)

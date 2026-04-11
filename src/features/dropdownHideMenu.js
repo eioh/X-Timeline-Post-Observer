@@ -69,6 +69,8 @@ function createDropdownMenuItem ({ className, label, onSelect }) {
 export function setupDropdownHideMenu ({
   addHiddenStatus,
   addHiddenUser,
+  addFollowUser,
+  addListUser,
   reapplyFilters
 }) {
   // X 標準メニューは「どの投稿から開いたか」を直接渡してこないため、直前クリックを手掛かりにする。
@@ -107,6 +109,48 @@ export function setupDropdownHideMenu ({
     if (!info.statusId && !info.userId) return
 
     if (info.userId) {
+      menu.appendChild(
+        createDropdownMenuItem({
+          className: 'xtlo-hide-post-menuitem',
+          label: `フォローとして追加 (@${info.userId})`,
+          onSelect: async menuItem => {
+            const dropdownMenu = menuItem.closest('[role="menu"]')
+
+            await addFollowUser(info.userId)
+            reapplyFilters()
+
+            if (dropdownMenu) {
+              closeDropdownMenu(dropdownMenu)
+            }
+
+            console.log(
+              `[X-Observer] メニューからフォローユーザーを追加しました: @${info.userId}`
+            )
+          }
+        })
+      )
+
+      menu.appendChild(
+        createDropdownMenuItem({
+          className: 'xtlo-hide-post-menuitem',
+          label: `リストインとして追加 (@${info.userId})`,
+          onSelect: async menuItem => {
+            const dropdownMenu = menuItem.closest('[role="menu"]')
+
+            await addListUser(info.userId)
+            reapplyFilters()
+
+            if (dropdownMenu) {
+              closeDropdownMenu(dropdownMenu)
+            }
+
+            console.log(
+              `[X-Observer] メニューからリストインユーザーを追加しました: @${info.userId}`
+            )
+          }
+        })
+      )
+
       menu.appendChild(
         createDropdownMenuItem({
           className: 'xtlo-hide-user-menuitem xtlo-hide-post-menuitem',

@@ -10,13 +10,15 @@ export const EXPIRE_MS = EXPIRE_DAYS * 24 * 60 * 60 * 1000
 
 // 設定 JSON の互換性判定に使う形式バージョン。
 // 形式変更時は import 側の検証と必ずセットで更新する。
-export const EXPORT_VERSION = 2
+export const EXPORT_VERSION = 3
 
 // Tampermonkey ストレージの保存キー一覧。
 // モジュール分割後もキー名を散らさず、互換性影響をここで追えるようにしている。
 export const STORAGE_KEYS = {
   mediaFilterLists: 'xtlo_mediaFilterLists',
   hiddenUserIds: 'xtlo_hiddenUserIds',
+  followUserIds: 'xtlo_followUserIds',
+  listUserIds: 'xtlo_listUserIds',
   hiddenWords: 'xtlo_hiddenWords',
   hiddenStatuses: 'xtlo_hiddenStatuses',
   hideUIEnabled: 'xtlo_hideUIEnabled',

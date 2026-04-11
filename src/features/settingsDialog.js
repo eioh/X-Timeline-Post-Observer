@@ -8,6 +8,16 @@ const TAB_DEFINITIONS = [
     placeholder: '[@]user_id'
   },
   {
+    key: 'follow',
+    label: 'フォロー',
+    placeholder: '[@]user_id'
+  },
+  {
+    key: 'list',
+    label: 'リスト',
+    placeholder: '[@]user_id'
+  },
+  {
     key: 'statuses',
     label: 'ポストID',
     placeholder: 'post_id / URL'
@@ -459,6 +469,22 @@ function getItemsForTab (tabKey) {
     }))
   }
 
+  if (tabKey === 'follow') {
+    return config.followUserIds.map(value => ({
+      value,
+      title: `@${value}`,
+      subtitle: 'フォローユーザー'
+    }))
+  }
+
+  if (tabKey === 'list') {
+    return config.listUserIds.map(value => ({
+      value,
+      title: `@${value}`,
+      subtitle: 'リストインユーザー'
+    }))
+  }
+
   if (tabKey === 'statuses') {
     return config.hiddenStatuses.map(entry => ({
       value: entry.statusId,
@@ -496,6 +522,10 @@ export function createSettingsDialog ({
   removeHiddenStatus,
   addHiddenUser,
   removeHiddenUser,
+  addFollowUser,
+  removeFollowUser,
+  addListUser,
+  removeListUser,
   addHiddenWord,
   removeHiddenWord,
   addMediaFilterList,
@@ -513,6 +543,8 @@ export function createSettingsDialog ({
   let currentTab = 'users'
   const pageByTab = {
     users: 1,
+    follow: 1,
+    list: 1,
     statuses: 1,
     words: 1,
     media: 1,
@@ -552,6 +584,42 @@ export function createSettingsDialog ({
         clearAll: async () => {
           for (const value of [...config.hiddenUserIds]) {
             await removeHiddenUser(value)
+          }
+          reapplyFilters()
+        },
+        normalizeInput: value => value.replace(/^@/, '')
+      }
+    }
+
+    if (tabKey === 'follow') {
+      return {
+        items: getItemsForTab(tabKey),
+        addLabel: 'Add',
+        clearLabel: 'Clear all follows',
+        totalLabel: 'Known Users',
+        addItem: async value => addFollowUser(value),
+        removeItem: async value => removeFollowUser(value),
+        clearAll: async () => {
+          for (const value of [...config.followUserIds]) {
+            await removeFollowUser(value)
+          }
+          reapplyFilters()
+        },
+        normalizeInput: value => value.replace(/^@/, '')
+      }
+    }
+
+    if (tabKey === 'list') {
+      return {
+        items: getItemsForTab(tabKey),
+        addLabel: 'Add',
+        clearLabel: 'Clear all lists',
+        totalLabel: 'Known Users',
+        addItem: async value => addListUser(value),
+        removeItem: async value => removeListUser(value),
+        clearAll: async () => {
+          for (const value of [...config.listUserIds]) {
+            await removeListUser(value)
           }
           reapplyFilters()
         },
@@ -641,6 +709,22 @@ export function createSettingsDialog ({
       return `
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path fill="currentColor" d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm0 2c-4 0-7 2-7 4.5V20h14v-1.5C19 16 16 14 12 14z"/>
+        </svg>
+      `
+    }
+
+    if (tabKey === 'follow') {
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M17 7a3 3 0 1 1-3-3 3 3 0 0 1 3 3zm-8 1a3 3 0 1 0-3-3 3 3 0 0 0 3 3zm5 2c-2.33 0-7 1.17-7 3.5V16h14v-2.5C21 11.17 16.33 10 14 10zm-5 1c-2.67 0-8 1.34-8 4v1h4v-2.5c0-.9.37-1.72 1.03-2.4A12.7 12.7 0 0 1 9 11z"/>
+        </svg>
+      `
+    }
+
+    if (tabKey === 'list') {
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M4 6h3v3H4zm0 5h3v3H4zm0 5h3v3H4zm5-10h11v3H9zm0 5h11v3H9zm0 5h11v3H9z"/>
         </svg>
       `
     }

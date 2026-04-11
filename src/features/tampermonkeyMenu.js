@@ -43,6 +43,8 @@ function parseStatusId (input) {
 export function registerMenuCommands ({
   addHiddenStatus,
   addHiddenUser,
+  addFollowUser,
+  addListUser,
   addHiddenWord,
   exportConfigToFile,
   importConfigFromFile,
@@ -63,6 +65,32 @@ export function registerMenuCommands ({
     }
 
     await addHiddenUser(userId)
+    reapplyFilters()
+  })
+
+  GM_registerMenuCommand('フォローユーザーIDを追加', async () => {
+    const userId = normalizePromptInput(
+      prompt('フォローとして記録したいユーザー ID を入力してください。@ あり/なしどちらでも構いません')
+    )
+    if (!userId) {
+      console.log('[X-Observer] 空のフォローユーザー ID 入力はキャンセルしました')
+      return
+    }
+
+    await addFollowUser(userId)
+    reapplyFilters()
+  })
+
+  GM_registerMenuCommand('リストインユーザーIDを追加', async () => {
+    const userId = normalizePromptInput(
+      prompt('リストインとして記録したいユーザー ID を入力してください。@ あり/なしどちらでも構いません')
+    )
+    if (!userId) {
+      console.log('[X-Observer] 空のリストインユーザー ID 入力はキャンセルしました')
+      return
+    }
+
+    await addListUser(userId)
     reapplyFilters()
   })
 
