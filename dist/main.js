@@ -315,13 +315,47 @@
   }
 
   /**
+   * リポスト文脈の有無と、リポストしたユーザー ID を抽出する。
+   * 入力: 親 article 要素
+   * 出力: isRepost と repostedBy を持つオブジェクト
+   * 主な処理内容: socialContext の親リンクから /<screen_name> 形式のプロフィールパスだけを採用する
+   */
+  function extractRepostInfo (article) {
+    const socialContextEl = article.querySelector('[data-testid="socialContext"]');
+    if (!socialContextEl) {
+      return {
+        isRepost: false,
+        repostedBy: null
+      }
+    }
+
+    const repostLink = socialContextEl.closest('a[href^="/"]');
+    if (!repostLink) {
+      return {
+        isRepost: true,
+        repostedBy: null
+      }
+    }
+
+    const href = repostLink.getAttribute('href') || '';
+    // socialContext 近傍には投稿詳細リンクもあり得るため、プロフィール直下のパスだけを採用する。
+    const match = href.match(/^\/([^/?#]+)$/);
+
+    return {
+      isRepost: true,
+      repostedBy: match ? match[1] : null
+    }
+  }
+
+  /**
    * タイムライン上の article から投稿情報を抽出する。
    * 入力: article 要素
-   * 出力: statusId / userId / 本文 / メディア有無 / 引用情報を含むオブジェクト
+   * 出力: statusId / userId / 本文 / リポスト情報 / メディア有無 / 引用情報を含むオブジェクト
    * 主な処理内容:
    * 1. 投稿 ID とユーザー ID を取る
    * 2. 本文を見た目に近い形で復元する
-   * 3. 引用投稿内メディアを差し引いたうえで自前メディアを判定する
+   * 3. socialContext からリポスト情報を取る
+   * 4. 引用投稿内メディアを差し引いたうえで自前メディアを判定する
    */
   function extractPostInfo (article) {
     const statusLink = article.querySelector('a[href*="/status/"]');
@@ -338,6 +372,7 @@
 
     const tweetTextEl = article.querySelector('[data-testid="tweetText"]');
     const text = tweetTextEl ? getFullVisibleText(tweetTextEl).trim() : '';
+    const { isRepost, repostedBy } = extractRepostInfo(article);
 
     const quoteDivElement = article.querySelector('div[role="link"][tabindex="0"]');
     const totalPhotos = article.querySelectorAll('[data-testid="tweetPhoto"]').length;
@@ -363,6 +398,8 @@
       statusId,
       userId,
       text,
+      isRepost,
+      repostedBy,
       hasImages,
       hasVideos,
       hasMedia: hasImages || hasVideos,
