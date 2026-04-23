@@ -5,6 +5,8 @@ import { EXPIRE_MS, STORAGE_KEYS } from '../constants.js'
 export const config = {
   mediaFilterLists: [],
   hiddenUserIds: [],
+  followUserIds: [],
+  listUserIds: [],
   hiddenWords: [],
   hiddenStatuses: [],
   hideUIEnabled: true,
@@ -22,6 +24,8 @@ export const config = {
 function assignConfig (nextConfig) {
   config.mediaFilterLists = nextConfig.mediaFilterLists
   config.hiddenUserIds = nextConfig.hiddenUserIds
+  config.followUserIds = nextConfig.followUserIds
+  config.listUserIds = nextConfig.listUserIds
   config.hiddenWords = nextConfig.hiddenWords
   config.hiddenStatuses = nextConfig.hiddenStatuses
   config.hideUIEnabled = nextConfig.hideUIEnabled
@@ -41,6 +45,8 @@ export async function loadConfig () {
   const stored = await GM_getValues({
     [STORAGE_KEYS.mediaFilterLists]: [],
     [STORAGE_KEYS.hiddenUserIds]: [],
+    [STORAGE_KEYS.followUserIds]: [],
+    [STORAGE_KEYS.listUserIds]: [],
     [STORAGE_KEYS.hiddenWords]: [],
     [STORAGE_KEYS.hiddenStatuses]: [],
     [STORAGE_KEYS.hideUIEnabled]: true,
@@ -50,6 +56,8 @@ export async function loadConfig () {
   assignConfig({
     mediaFilterLists: stored[STORAGE_KEYS.mediaFilterLists],
     hiddenUserIds: stored[STORAGE_KEYS.hiddenUserIds],
+    followUserIds: stored[STORAGE_KEYS.followUserIds],
+    listUserIds: stored[STORAGE_KEYS.listUserIds],
     hiddenWords: stored[STORAGE_KEYS.hiddenWords],
     hiddenStatuses: stored[STORAGE_KEYS.hiddenStatuses],
     hideUIEnabled: stored[STORAGE_KEYS.hideUIEnabled],
@@ -98,6 +106,8 @@ export async function replaceConfig (nextConfig) {
   assignConfig({
     mediaFilterLists: nextConfig.mediaFilterLists,
     hiddenUserIds: nextConfig.hiddenUserIds,
+    followUserIds: nextConfig.followUserIds,
+    listUserIds: nextConfig.listUserIds,
     hiddenWords: nextConfig.hiddenWords,
     hiddenStatuses: nextConfig.hiddenStatuses,
     hideUIEnabled: nextConfig.hideUIEnabled,
@@ -107,6 +117,8 @@ export async function replaceConfig (nextConfig) {
   await GM_setValues({
     [STORAGE_KEYS.mediaFilterLists]: config.mediaFilterLists,
     [STORAGE_KEYS.hiddenUserIds]: config.hiddenUserIds,
+    [STORAGE_KEYS.followUserIds]: config.followUserIds,
+    [STORAGE_KEYS.listUserIds]: config.listUserIds,
     [STORAGE_KEYS.hiddenWords]: config.hiddenWords,
     [STORAGE_KEYS.hiddenStatuses]: config.hiddenStatuses,
     [STORAGE_KEYS.hideUIEnabled]: config.hideUIEnabled,
@@ -131,6 +143,38 @@ export async function removeMediaFilterList (listName) {
 }
 
 /**
+ * ユーザー ID を保存用の書式へ正規化する。
+ * 入力: @ の有無どちらでもよいユーザー ID。
+ * 出力: 先頭の @ を除去したユーザー ID。
+ * 主な処理内容:
+ * 1. 手入力と自動取得で形式を揃える
+ * 2. 末尾空白も除去して重複判定を安定させる
+ */
+function normalizeUserId (userId) {
+  return userId.trim().replace(/^@/, '')
+}
+
+/**
+ * 指定した分類へユーザー ID を追加する。
+ * 入力: 保存先キー、ユーザー ID、ログ用分類名。
+ * 出力: 追加できた場合は true、既存なら false。
+ * 主な処理内容:
+ * 1. 先頭の @ を除去して比較用の形式へ揃える
+ * 2. 未登録時だけ配列へ追加して保存を予約する
+ */
+function rememberClassifiedUser (configKey, userId, label) {
+  const id = normalizeUserId(userId)
+  if (!id || config[configKey].includes(id)) {
+    return false
+  }
+
+  config[configKey].push(id)
+  void saveKey(configKey)
+  console.log(`[X-Observer] ${label}ユーザー追加: @${id}`)
+  return true
+}
+
+/**
  * 非表示ユーザーを追加する。
  * 入力: @ の有無どちらでもよいユーザー ID。
  * 出力: Promise<void>
@@ -139,7 +183,7 @@ export async function removeMediaFilterList (listName) {
  * 2. 重複しない場合だけ設定へ追加して保存する
  */
 export async function addHiddenUser (userId) {
-  const id = userId.replace(/^@/, '')
+  const id = normalizeUserId(userId)
   if (!config.hiddenUserIds.includes(id)) {
     config.hiddenUserIds.push(id)
     await saveKey('hiddenUserIds')
@@ -149,10 +193,85 @@ export async function addHiddenUser (userId) {
 
 /** 非表示ユーザーを削除する。*/
 export async function removeHiddenUser (userId) {
-  const id = userId.replace(/^@/, '')
+  const id = normalizeUserId(userId)
   config.hiddenUserIds = config.hiddenUserIds.filter(user => user !== id)
   await saveKey('hiddenUserIds')
   console.log(`[X-Observer] 非表示ユーザー削除: @${id}`)
+}
+
+/**
+ * フォローユーザーを追加する。
+ * 入力: @ の有無どちらでもよいユーザー ID。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 保存形式へ正規化して重複を避ける
+ * 2. ストレージへ保存して後続表示へ使えるようにする
+ */
+export async function addFollowUser (userId) {
+  const id = normalizeUserId(userId)
+  if (!config.followUserIds.includes(id)) {
+    config.followUserIds.push(id)
+    await saveKey('followUserIds')
+    console.log(`[X-Observer] フォローユーザー追加: @${id}`)
+  }
+}
+
+/** フォローユーザーを削除する。*/
+export async function removeFollowUser (userId) {
+  const id = normalizeUserId(userId)
+  config.followUserIds = config.followUserIds.filter(user => user !== id)
+  await saveKey('followUserIds')
+  console.log(`[X-Observer] フォローユーザー削除: @${id}`)
+}
+
+/**
+ * リストインユーザーを追加する。
+ * 入力: @ の有無どちらでもよいユーザー ID。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 保存形式へ正規化して重複を避ける
+ * 2. ストレージへ保存して後続表示へ使えるようにする
+ */
+export async function addListUser (userId) {
+  const id = normalizeUserId(userId)
+  if (!config.listUserIds.includes(id)) {
+    config.listUserIds.push(id)
+    await saveKey('listUserIds')
+    console.log(`[X-Observer] リストインユーザー追加: @${id}`)
+  }
+}
+
+/** リストインユーザーを削除する。*/
+export async function removeListUser (userId) {
+  const id = normalizeUserId(userId)
+  config.listUserIds = config.listUserIds.filter(user => user !== id)
+  await saveKey('listUserIds')
+  console.log(`[X-Observer] リストインユーザー削除: @${id}`)
+}
+
+/**
+ * 自動判定した分類ユーザーを保存する。
+ * 入力: タイムライン文脈、ユーザー ID、リポストかどうか。
+ * 出力: 新規追加が発生した場合は true、不要なら false。
+ * 主な処理内容:
+ * 1. リポストや userId なしを除外する
+ * 2. [フォロー中] はフォローとして記録する
+ * 3. [おすすめ] 以外のタブはリストインとして記録する
+ */
+export function learnClassifiedUserFromTab (tabName, userId, isRepost) {
+  if (!userId || isRepost) {
+    return false
+  }
+
+  if (tabName === 'フォロー中') {
+    return rememberClassifiedUser('followUserIds', userId, 'フォロー')
+  }
+
+  if (tabName && tabName !== 'おすすめ') {
+    return rememberClassifiedUser('listUserIds', userId, 'リストイン')
+  }
+
+  return false
 }
 
 /**

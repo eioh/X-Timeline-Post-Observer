@@ -1,4 +1,5 @@
 import { COMPACT_LAYOUT_CSS, CUSTOM_MENU_CSS, HIDE_UI_CSS } from '../constants.js'
+import { applyUserLabelStyles } from './userLabelColors.js'
 
 // UI 非表示用の style 要素を保持する。
 // ON/OFF のたびに style を探し直さずに済み、二重挿入も防げるため参照を保持する。
@@ -37,4 +38,5 @@ export function toggleHideUI () {
 export function applyBaseStyles () {
   GM_addStyle(COMPACT_LAYOUT_CSS)
   GM_addStyle(CUSTOM_MENU_CSS)
+  applyUserLabelStyles()
 }
