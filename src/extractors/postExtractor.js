@@ -12,6 +12,19 @@ export function getActiveTabName () {
 }
 
 /**
+ * 現在の画面がホームタイムラインかどうかを判定する。
+ * 入力: なし
+ * 出力: ホームタイムラインなら true
+ * 主な処理内容:
+ * 1. パス名を正規化して末尾スラッシュ差を吸収する
+ * 2. /home のときだけ true を返す
+ */
+export function isHomeTimelinePage () {
+  const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/'
+  return normalizedPath === '/home'
+}
+
+/**
  * 引用カードの React Fiber から引用先 statusId を探す。
  * 入力: 引用カード相当の DOM 要素
  * 出力: 引用先 statusId。取れない場合は null

@@ -1,5 +1,9 @@
 import { HIDDEN_ATTR, PROCESSED_ATTR } from '../constants.js'
-import { extractPostInfo, getActiveTabName } from '../extractors/postExtractor.js'
+import {
+  extractPostInfo,
+  getActiveTabName,
+  isHomeTimelinePage
+} from '../extractors/postExtractor.js'
 import { applyUserLabelsToArticle } from '../features/userLabelColors.js'
 import { shouldHide } from '../filters/shouldHide.js'
 import { config, learnClassifiedUserFromTab } from '../state/configStore.js'
@@ -25,13 +29,17 @@ export function createProcessor () {
     if (articles.length === 0) return
 
     const tabName = getActiveTabName()
+    const shouldLearnClassifiedUser = isHomeTimelinePage()
     let didLearnClassifiedUser = false
 
     articles.forEach(article => {
       article.setAttribute(PROCESSED_ATTR, 'true')
 
       const info = extractPostInfo(article)
-      if (learnClassifiedUserFromTab(tabName, info.userId, info.isRepost)) {
+      if (
+        shouldLearnClassifiedUser &&
+        learnClassifiedUserFromTab(tabName, info.userId, info.isRepost)
+      ) {
         didLearnClassifiedUser = true
       }
       applyUserLabelsToArticle(article, info, config)

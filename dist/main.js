@@ -197,6 +197,19 @@
   }
 
   /**
+   * 現在の画面がホームタイムラインかどうかを判定する。
+   * 入力: なし
+   * 出力: ホームタイムラインなら true
+   * 主な処理内容:
+   * 1. パス名を正規化して末尾スラッシュ差を吸収する
+   * 2. /home のときだけ true を返す
+   */
+  function isHomeTimelinePage () {
+    const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/';
+    return normalizedPath === '/home'
+  }
+
+  /**
    * 引用カードの React Fiber から引用先 statusId を探す。
    * 入力: 引用カード相当の DOM 要素
    * 出力: 引用先 statusId。取れない場合は null
@@ -553,16 +566,19 @@
   function applyUserLabelsToArticle (article, postInfo, config) {
     clearUserLabelClasses(article);
 
+    const quoteContainer = article.querySelector('div[role="link"][tabindex="0"]');
+    if (quoteContainer) {
+      clearUserLabelClasses(quoteContainer);
+    }
+
     const mainLabelType = getUserLabelType(postInfo.userId, config);
     applyLabelToUserInContainer(article, postInfo.userId, mainLabelType);
 
-    const quoteContainer = article.querySelector('div[role="link"][tabindex="0"]');
     if (!quoteContainer || !postInfo.quote?.userId) {
       return
     }
 
     const quoteLabelType = getUserLabelType(postInfo.quote.userId, config);
-    clearUserLabelClasses(quoteContainer);
     applyLabelToUserInContainer(quoteContainer, postInfo.quote.userId, quoteLabelType);
   }
 
@@ -1042,13 +1058,17 @@
       if (articles.length === 0) return
 
       const tabName = getActiveTabName();
+      const shouldLearnClassifiedUser = isHomeTimelinePage();
       let didLearnClassifiedUser = false;
 
       articles.forEach(article => {
         article.setAttribute(PROCESSED_ATTR, 'true');
 
         const info = extractPostInfo(article);
-        if (learnClassifiedUserFromTab(tabName, info.userId, info.isRepost)) {
+        if (
+          shouldLearnClassifiedUser &&
+          learnClassifiedUserFromTab(tabName, info.userId, info.isRepost)
+        ) {
           didLearnClassifiedUser = true;
         }
         applyUserLabelsToArticle(article, info, config);

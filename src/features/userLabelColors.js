@@ -142,15 +142,18 @@ function applyLabelToUserInContainer (container, userId, labelType) {
 export function applyUserLabelsToArticle (article, postInfo, config) {
   clearUserLabelClasses(article)
 
+  const quoteContainer = article.querySelector('div[role="link"][tabindex="0"]')
+  if (quoteContainer) {
+    clearUserLabelClasses(quoteContainer)
+  }
+
   const mainLabelType = getUserLabelType(postInfo.userId, config)
   applyLabelToUserInContainer(article, postInfo.userId, mainLabelType)
 
-  const quoteContainer = article.querySelector('div[role="link"][tabindex="0"]')
   if (!quoteContainer || !postInfo.quote?.userId) {
     return
   }
 
   const quoteLabelType = getUserLabelType(postInfo.quote.userId, config)
-  clearUserLabelClasses(quoteContainer)
   applyLabelToUserInContainer(quoteContainer, postInfo.quote.userId, quoteLabelType)
 }
