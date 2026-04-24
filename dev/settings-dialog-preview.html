@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>X-Observer Settings Preview</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      background: #0f1419;
+      color: #e7e9ea;
+      font-family: "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+    }
+
+    .preview-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: minmax(240px, 320px) 1fr;
+    }
+
+    .preview-panel {
+      padding: 24px;
+      border-right: 1px solid rgba(239, 243, 244, 0.12);
+      background: #000000;
+    }
+
+    .preview-title {
+      margin: 0 0 8px;
+      font-size: 20px;
+      font-weight: 800;
+    }
+
+    .preview-copy {
+      margin: 0 0 18px;
+      color: #8b98a5;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .preview-actions {
+      display: grid;
+      gap: 8px;
+    }
+
+    .preview-button {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid rgba(239, 243, 244, 0.14);
+      border-radius: 8px;
+      background: #16181c;
+      color: #eff3f4;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .preview-button:hover {
+      background: #1d2026;
+    }
+
+    .preview-main {
+      position: relative;
+      min-width: 0;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(29, 155, 240, 0.08), transparent 46%),
+        #0f1419;
+    }
+
+    .preview-timeline {
+      width: min(620px, calc(100vw - 380px));
+      min-height: 100vh;
+      margin: 0 auto;
+      border-inline: 1px solid rgba(239, 243, 244, 0.12);
+      background: #000000;
+    }
+
+    .preview-header {
+      position: sticky;
+      top: 0;
+      padding: 16px;
+      border-bottom: 1px solid rgba(239, 243, 244, 0.12);
+      background: rgba(0, 0, 0, 0.84);
+      backdrop-filter: blur(12px);
+      font-size: 18px;
+      font-weight: 800;
+    }
+
+    .preview-post {
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      gap: 12px;
+      padding: 16px;
+      border-bottom: 1px solid rgba(239, 243, 244, 0.12);
+    }
+
+    .preview-avatar {
+      width: 44px;
+      height: 44px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, #1d9bf0, #00ba7c);
+    }
+
+    .preview-line {
+      height: 12px;
+      margin: 8px 0;
+      border-radius: 999px;
+      background: #202327;
+    }
+
+    .preview-line.short {
+      width: 48%;
+    }
+
+    .preview-line.medium {
+      width: 76%;
+    }
+
+    @media (max-width: 860px) {
+      .preview-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .preview-panel {
+        border-right: 0;
+        border-bottom: 1px solid rgba(239, 243, 244, 0.12);
+      }
+
+      .preview-actions {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .preview-timeline {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="preview-shell">
+    <aside class="preview-panel">
+      <h1 class="preview-title">Settings Preview</h1>
+      <p class="preview-copy">本番の設定ダイアログ実装を読み込み、X 風の背景上で見た目と操作を確認します。</p>
+      <div class="preview-actions">
+        <button class="preview-button" data-open-tab="users">ユーザー</button>
+        <button class="preview-button" data-open-tab="statuses">ポスト</button>
+        <button class="preview-button" data-open-tab="words">キーワード</button>
+        <button class="preview-button" data-open-tab="media">メディア</button>
+        <button class="preview-button" data-open-tab="follow">フォロー</button>
+        <button class="preview-button" data-open-tab="list">リスト</button>
+        <button class="preview-button" data-open-tab="settings">設定</button>
+      </div>
+    </aside>
+    <main class="preview-main">
+      <section class="preview-timeline" aria-label="プレビュー用タイムライン">
+        <div class="preview-header">ホーム</div>
+        <article class="preview-post">
+          <div class="preview-avatar"></div>
+          <div>
+            <div class="preview-line short"></div>
+            <div class="preview-line medium"></div>
+            <div class="preview-line"></div>
+          </div>
+        </article>
+        <article class="preview-post">
+          <div class="preview-avatar"></div>
+          <div>
+            <div class="preview-line medium"></div>
+            <div class="preview-line"></div>
+            <div class="preview-line short"></div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <script type="module">
+    import { createSettingsDialog } from '../src/features/settingsDialog.js?preview=item-search'
+    import { config } from '../src/state/configStore.js'
+
+    window.GM_addStyle = cssText => {
+      const style = document.createElement('style')
+      style.textContent = cssText
+      document.head.appendChild(style)
+    }
+
+    window.confirm = window.confirm.bind(window)
+    window.alert = window.alert.bind(window)
+
+    /**
+     * プレビュー用の初期データを config へ流し込む。
+     * 入力: なし。
+     * 出力: なし。
+     * 主な処理内容:
+     * 1. 一覧と設定トグルが見えるようにサンプル値を設定する
+     * 2. 本番と同じ共有 config を使い、描画ロジックとの差を減らす
+     */
+    function seedPreviewConfig () {
+      const expiresAt = Date.now() + 1000 * 60 * 60 * 24 * 30
+      config.hiddenUserIds = ['spam_user', 'mute_target', 'very_long_user_name_for_layout_check']
+      config.followUserIds = ['team_member', 'product_news']
+      config.listUserIds = ['industry_watch', 'event_reporter']
+      config.hiddenWords = ['spoiler', 'プロモーション', 'very-long-keyword-for-wrapping-check']
+      config.mediaFilterLists = ['ニュース', '画像なし監視']
+      config.hiddenStatuses = [
+        { statusId: '1789012345678901234', expiresAt },
+        { statusId: '1789012345678905678', expiresAt }
+      ]
+      config.hideUIEnabled = true
+      config.autoRefreshEnabled = true
+    }
+
+    /**
+     * 配列設定へ値を追加する。
+     * 入力: config の配列キー、追加したい値。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. 先頭の @ を除去して保存形式を本番に近づける
+     * 2. 重複しない場合だけ配列へ追加する
+     */
+    async function addUserLikeValue (key, value) {
+      const normalized = value.trim().replace(/^@/, '')
+      if (normalized && !config[key].includes(normalized)) {
+        config[key].push(normalized)
+      }
+    }
+
+    /**
+     * 配列設定から値を削除する。
+     * 入力: config の配列キー、削除したい値。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. 先頭の @ を除去して比較形式を揃える
+     * 2. 対象以外を残した配列へ置き換える
+     */
+    async function removeUserLikeValue (key, value) {
+      const normalized = value.trim().replace(/^@/, '')
+      config[key] = config[key].filter(item => item !== normalized)
+    }
+
+    /**
+     * 文字列配列へ値を追加する。
+     * 入力: config の配列キー、追加したい値。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. 空文字を除外する
+     * 2. 重複しない場合だけ配列へ追加する
+     */
+    async function addStringValue (key, value) {
+      const normalized = value.trim()
+      if (normalized && !config[key].includes(normalized)) {
+        config[key].push(normalized)
+      }
+    }
+
+    /**
+     * 文字列配列から値を削除する。
+     * 入力: config の配列キー、削除したい値。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. 完全一致する値だけを削除する
+     * 2. 残りを新しい配列として config に戻す
+     */
+    async function removeStringValue (key, value) {
+      config[key] = config[key].filter(item => item !== value)
+    }
+
+    /**
+     * ポスト ID をプレビュー設定へ追加する。
+     * 入力: ポスト ID。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. 既存 ID と重複しないか確認する
+     * 2. 本番と同じ期限付き形式で追加する
+     */
+    async function addHiddenStatus (statusId) {
+      if (config.hiddenStatuses.some(entry => entry.statusId === statusId)) {
+        return
+      }
+      config.hiddenStatuses.push({
+        statusId,
+        expiresAt: Date.now() + 1000 * 60 * 60 * 24 * 30
+      })
+    }
+
+    /**
+     * ポスト ID をプレビュー設定から削除する。
+     * 入力: 削除したいポスト ID。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. statusId が一致しない項目だけを残す
+     */
+    async function removeHiddenStatus (statusId) {
+      config.hiddenStatuses = config.hiddenStatuses.filter(entry => entry.statusId !== statusId)
+    }
+
+    /**
+     * 設定ダイアログをプレビュー向けコールバックで生成する。
+     * 入力: なし。
+     * 出力: open / close を持つダイアログ制御オブジェクト。
+     * 主な処理内容:
+     * 1. 本番の createSettingsDialog に、保存の代わりにメモリ更新する関数を渡す
+     * 2. インポートとエクスポートはプレビュー内で完結する通知に置き換える
+     */
+    function createPreviewDialog () {
+      return createSettingsDialog({
+        addHiddenStatus,
+        removeHiddenStatus,
+        addHiddenUser: value => addUserLikeValue('hiddenUserIds', value),
+        removeHiddenUser: value => removeUserLikeValue('hiddenUserIds', value),
+        addFollowUser: value => addUserLikeValue('followUserIds', value),
+        removeFollowUser: value => removeUserLikeValue('followUserIds', value),
+        addListUser: value => addUserLikeValue('listUserIds', value),
+        removeListUser: value => removeUserLikeValue('listUserIds', value),
+        addHiddenWord: value => addStringValue('hiddenWords', value),
+        removeHiddenWord: value => removeStringValue('hiddenWords', value),
+        addMediaFilterList: value => addStringValue('mediaFilterLists', value),
+        removeMediaFilterList: value => removeStringValue('mediaFilterLists', value),
+        setHideUI: enabled => {
+          config.hideUIEnabled = enabled
+        },
+        setHideUIEnabled: async enabled => {
+          config.hideUIEnabled = enabled
+        },
+        applyAutoRefreshEnabled: enabled => {
+          config.autoRefreshEnabled = enabled
+        },
+        setAutoRefreshEnabled: async enabled => {
+          config.autoRefreshEnabled = enabled
+        },
+        exportConfigToFile: () => {
+          console.log('[Preview] export', JSON.parse(JSON.stringify(config)))
+          alert('プレビューでは console に設定内容を出力します。')
+        },
+        importConfigFromFile: async () => {
+          seedPreviewConfig()
+          alert('プレビュー用の初期データを再読み込みしました。')
+        },
+        reapplyFilters: () => {}
+      })
+    }
+
+    seedPreviewConfig()
+    const dialog = createPreviewDialog()
+    dialog.open('users')
+
+    document.querySelector('.preview-actions').addEventListener('click', event => {
+      const button = event.target.closest('[data-open-tab]')
+      if (!button) return
+      dialog.open(button.dataset.openTab)
+    })
+  </script>
+</body>
+</html>

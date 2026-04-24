@@ -34,6 +34,7 @@ X / Twitter のタイムラインを監視し、条件に一致する投稿を�
 - 配布用ビルド: [`dist/main.js`](./dist/main.js)
 - 本番ビルド: `npm run build`
 - 監視ビルド: `npm run watch`
+- 設定ダイアログの軽量プレビュー: ローカルサーバーを起動し、[`dev/settings-dialog-preview.html`](./dev/settings-dialog-preview.html) を開く
 
 ## 使い方
 

@@ -1548,6 +1548,11 @@
     { key: 'list',     label: 'リスト',     placeholder: '[@]user_id',    category: 'color' },
     { key: 'settings', label: '設定',       placeholder: '',              category: 'settings' }
   ];
+  const CATEGORY_DEFINITIONS = [
+    { key: 'hide',     label: '非表示' },
+    { key: 'color',    label: '分類' },
+    { key: 'settings', label: '設定' }
+  ];
 
   const DIALOG_STYLE = `
   .xtlo-settings-overlay {
@@ -1581,9 +1586,17 @@
 
   .xtlo-settings-header {
     display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 20px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .xtlo-settings-header-row {
+    display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 20px 10px;
+    width: 100%;
   }
 
   .xtlo-settings-title {
@@ -1601,53 +1614,38 @@
     cursor: pointer;
   }
 
-  .xtlo-settings-tabs {
+  .xtlo-settings-category-tabs {
     display: flex;
-    align-items: stretch;
-    gap: 14px;
-    padding: 0 20px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    align-items: flex-end;
+    gap: 22px;
+    width: 100%;
   }
 
-  .xtlo-settings-tab {
+  .xtlo-settings-category-tab {
     position: relative;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 8px 0 10px;
+    min-height: 34px;
+    padding: 0 10px 10px;
     border: 0;
+    border-radius: 8px 8px 0 0;
     background: transparent;
     color: rgba(255, 255, 255, 0.7);
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
     cursor: pointer;
   }
 
-  .xtlo-settings-tab-icon {
-    display: inline-flex;
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
+  .xtlo-settings-category-tab:hover {
+    background: rgba(255, 255, 255, 0.07);
+    color: rgba(255, 255, 255, 0.92);
   }
 
-  .xtlo-settings-tab-icon svg {
-    width: 100%;
-    height: 100%;
-  }
-
-  .xtlo-settings-tab-separator {
-    width: 1px;
-    align-self: stretch;
-    margin: 8px 0;
-    background: rgba(255, 255, 255, 0.14);
-    flex-shrink: 0;
-  }
-
-  .xtlo-settings-tab[data-active="true"] {
+  .xtlo-settings-category-tab[data-active="true"] {
     color: #ffffff;
   }
 
-  .xtlo-settings-tab[data-active="true"]::after {
+  .xtlo-settings-category-tab[data-active="true"]::after {
     content: "";
     position: absolute;
     left: 0;
@@ -1660,6 +1658,69 @@
 
   .xtlo-settings-body {
     flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .xtlo-settings-layout {
+    display: grid;
+    grid-template-columns: 148px minmax(0, 1fr);
+    height: 100%;
+    min-height: 0;
+  }
+
+  .xtlo-settings-side-tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 16px 10px 16px 16px;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.025);
+    overflow: auto;
+  }
+
+  .xtlo-settings-side-tab {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 36px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.68);
+    font-size: 13px;
+    font-weight: 700;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .xtlo-settings-side-tab:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  .xtlo-settings-side-tab[data-active="true"] {
+    background: rgba(29, 155, 240, 0.16);
+    color: #ffffff;
+  }
+
+  .xtlo-settings-side-icon {
+    display: inline-flex;
+    width: 15px;
+    height: 15px;
+    flex-shrink: 0;
+  }
+
+  .xtlo-settings-side-icon svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .xtlo-settings-content {
+    min-width: 0;
     overflow: auto;
     padding: 16px 20px 14px;
   }
@@ -1673,6 +1734,14 @@
     margin-bottom: 14px;
   }
 
+  .xtlo-settings-search-row {
+    display: flex;
+    padding: 8px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.05);
+    margin-bottom: 10px;
+  }
+
   .xtlo-settings-input {
     flex: 1;
     border: 0;
@@ -1684,7 +1753,19 @@
     font-size: 14px;
   }
 
-  .xtlo-settings-input::placeholder {
+  .xtlo-settings-search-input {
+    flex: 1;
+    border: 0;
+    outline: none;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    padding: 9px 12px;
+    color: #ffffff;
+    font-size: 13px;
+  }
+
+  .xtlo-settings-input::placeholder,
+  .xtlo-settings-search-input::placeholder {
     color: rgba(255, 255, 255, 0.32);
   }
 
@@ -1932,16 +2013,36 @@
       border-radius: 22px;
     }
 
-    .xtlo-settings-tabs {
-      gap: 10px;
+    .xtlo-settings-header {
+      padding: 14px 14px 0;
+    }
+
+    .xtlo-settings-category-tabs {
+      gap: 18px;
       overflow: auto;
     }
 
-    .xtlo-settings-tab-separator {
-      margin: 10px 0;
+    .xtlo-settings-layout {
+      grid-template-columns: 112px minmax(0, 1fr);
+      height: auto;
+    }
+
+    .xtlo-settings-side-tabs {
+      padding: 12px 8px;
+    }
+
+    .xtlo-settings-side-tab {
+      min-height: 34px;
+      padding: 0 8px;
+      font-size: 12px;
+    }
+
+    .xtlo-settings-content {
+      padding: 12px;
     }
 
     .xtlo-settings-add-row,
+    .xtlo-settings-search-row,
     .xtlo-settings-footer,
     .xtlo-settings-toggle-card {
       flex-direction: column;
@@ -2047,6 +2148,61 @@
   }
 
   /**
+   * 小項目キーから所属する大分類キーを返す。
+   * 入力: 小項目のタブキー。
+   * 出力: 大分類キー。見つからない場合は非表示分類。
+   * 主な処理内容:
+   * 1. TAB_DEFINITIONS から現在タブの定義を探す
+   * 2. 見つからない場合も UI が壊れないよう既定分類へ戻す
+   */
+  function getCategoryKeyForTab (tabKey) {
+    return TAB_DEFINITIONS.find(tab => tab.key === tabKey)?.category ?? 'hide'
+  }
+
+  /**
+   * 大分類に属する小項目定義だけを返す。
+   * 入力: 大分類キー。
+   * 出力: 該当する小項目定義配列。
+   * 主な処理内容:
+   * 1. category が一致する TAB_DEFINITIONS のみを抽出する
+   */
+  function getTabsForCategory (categoryKey) {
+    return TAB_DEFINITIONS.filter(tab => tab.category === categoryKey)
+  }
+
+  /**
+   * 大分類を開いたとき最初に選ぶ小項目キーを返す。
+   * 入力: 大分類キー。
+   * 出力: 先頭の小項目キー。見つからない場合は users。
+   * 主な処理内容:
+   * 1. 大分類内の先頭タブを取得する
+   * 2. 未定義分類でも描画を続けられるよう既定値を返す
+   */
+  function getDefaultTabForCategory (categoryKey) {
+    return getTabsForCategory(categoryKey)[0]?.key ?? 'users'
+  }
+
+  /**
+   * 検索語に一致する表示項目だけを返す。
+   * 入力: 表示項目配列と検索語。
+   * 出力: 検索語が空なら元の配列、一致語がある場合は絞り込み後の配列。
+   * 主な処理内容:
+   * 1. title / subtitle / value を小文字化して検索対象にする
+   * 2. 数千件でも削除対象を探しやすいよう、部分一致した項目だけを残す
+   */
+  function filterItemsByQuery (items, query) {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return items
+    }
+
+    return items.filter(item =>
+      [item.title, item.subtitle, item.value]
+        .some(value => String(value).toLowerCase().includes(normalizedQuery))
+    )
+  }
+
+  /**
    * ダイアログに使う設定 UI を生成する。
    * 入力: 各種追加・削除・保存コールバック。
    * 出力: open / close を持つオブジェクト。
@@ -2087,6 +2243,14 @@
       words: 1,
       media: 1,
       settings: 1
+    };
+    const searchByTab = {
+      users: '',
+      follow: '',
+      list: '',
+      statuses: '',
+      words: '',
+      media: ''
     };
 
     /**
@@ -2232,6 +2396,63 @@
       return `${count} Active Filters`
     }
 
+    /**
+     * 検索中の件数表示ラベルを返す。
+     * 入力: タブキー、検索後件数、全件数。
+     * 出力: フッターに表示する件数ラベル。
+     * 主な処理内容:
+     * 1. 検索語がある場合は一致件数と全件数を併記する
+     * 2. 検索していない場合は従来どおり全件数だけを表示する
+     */
+    function getFilteredFooterBadgeLabel (tabKey, filteredCount, totalCount) {
+      const baseLabel = getFooterBadgeLabel(tabKey, filteredCount);
+      if (!searchByTab[tabKey]) {
+        return baseLabel
+      }
+
+      return `${filteredCount} / ${totalCount} Active Filters`
+    }
+
+    /**
+     * 現在の大分類に対応する左側小項目ナビを描画する。
+     * 入力: 大分類キー。
+     * 出力: 小項目ボタンの HTML 文字列。
+     * 主な処理内容:
+     * 1. 大分類内の小項目だけを縦並びボタンへ変換する
+     * 2. 現在選択中の小項目へ active 状態を付ける
+     */
+    function renderSideTabs (categoryKey) {
+      return getTabsForCategory(categoryKey)
+        .map(tab => `
+        <button class="xtlo-settings-side-tab" data-tab="${tab.key}" data-active="${String(tab.key === currentTab)}">
+          <span class="xtlo-settings-side-icon">${getListIcon(tab.key)}</span>
+          <span>${tab.label}</span>
+        </button>
+      `)
+        .join('')
+    }
+
+    /**
+     * ページネーション UI を描画する。
+     * 入力: 現在ページと総ページ数。
+     * 出力: 前後移動ボタンとページ入力欄の HTML 文字列。
+     * 主な処理内容:
+     * 1. 上部と下部で同じ操作 UI を使えるよう HTML を共通化する
+     * 2. 端ページでは前後移動ボタンを無効化する
+     */
+    function renderPagination (currentPage, totalPages) {
+      return `
+      <div class="xtlo-settings-pagination">
+        <button class="xtlo-settings-page-btn" data-action="prev-page" ${currentPage <= 1 ? 'disabled' : ''} aria-label="前のページ">‹</button>
+        <div class="xtlo-settings-page-indicator">
+          <input class="xtlo-settings-page-current" data-role="page-input" inputmode="numeric" value="${currentPage}" aria-label="現在のページ" />
+          <div>/ ${totalPages}</div>
+        </div>
+        <button class="xtlo-settings-page-btn" data-action="next-page" ${currentPage >= totalPages ? 'disabled' : ''} aria-label="次のページ">›</button>
+      </div>
+    `
+    }
+
     /** ゴミ箱アイコン SVG を返す。*/
     function getTrashIcon () {
       return `
@@ -2311,22 +2532,33 @@
      * 入力: なし。
      * 出力: なし。
      * 主な処理内容:
-     * 1. 現在タブに応じたリストや設定項目を描画する
-     * 2. 件数とページ数からページネーション表示を更新する
+     * 1. 現在タブから大分類と左側小項目ナビを描画する
+     * 2. 現在タブに応じたリストや設定項目を右側へ描画する
+     * 3. 件数とページ数からページネーション表示を更新する
      */
     function render () {
       if (!overlay) return
 
       const body = overlay.querySelector('.xtlo-settings-body');
       const footer = overlay.querySelector('.xtlo-settings-footer');
-      const tabButtons = overlay.querySelectorAll('.xtlo-settings-tab');
+      const categoryKey = getCategoryKeyForTab(currentTab);
+      const categoryButtons = overlay.querySelectorAll('.xtlo-settings-category-tab');
 
-      tabButtons.forEach(button => {
-        button.dataset.active = String(button.dataset.tab === currentTab);
+      categoryButtons.forEach(button => {
+        button.dataset.active = String(button.dataset.category === categoryKey);
       });
 
+      body.innerHTML = `
+      <div class="xtlo-settings-layout">
+        <div class="xtlo-settings-side-tabs">${renderSideTabs(categoryKey)}</div>
+        <div class="xtlo-settings-content"></div>
+      </div>
+    `;
+
+      const content = body.querySelector('.xtlo-settings-content');
+
       if (currentTab === 'settings') {
-        body.innerHTML = `
+        content.innerHTML = `
         <div class="xtlo-settings-settings-grid">
           <div class="xtlo-settings-toggle-card">
             <div class="xtlo-settings-toggle-copy">
@@ -2368,11 +2600,13 @@
       const tabDefinition = TAB_DEFINITIONS.find(tab => tab.key === currentTab);
       const actions = getTabActions(currentTab);
       const totalItems = actions.items.length;
-      const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+      const searchQuery = searchByTab[currentTab] ?? '';
+      const filteredItems = filterItemsByQuery(actions.items, searchQuery);
+      const totalPages = Math.max(1, Math.ceil(filteredItems.length / PAGE_SIZE));
       const currentPage = Math.min(pageByTab[currentTab], totalPages);
       pageByTab[currentTab] = currentPage;
       const startIndex = (currentPage - 1) * PAGE_SIZE;
-      const visibleItems = actions.items.slice(startIndex, startIndex + PAGE_SIZE);
+      const visibleItems = filteredItems.slice(startIndex, startIndex + PAGE_SIZE);
 
       const listMarkup = visibleItems.length
         ? visibleItems
@@ -2393,25 +2627,22 @@
             .join('')
         : '<div class="xtlo-settings-empty">まだ項目はありません。</div>';
 
-      body.innerHTML = `
+      content.innerHTML = `
       <div class="xtlo-settings-add-row">
         <input class="xtlo-settings-input" type="text" placeholder="${escapeAttribute(tabDefinition.placeholder)}" />
         <button class="xtlo-settings-primary" data-action="add-item">${actions.addLabel}</button>
       </div>
-      <div class="xtlo-settings-list">${listMarkup}</div>
-      <div class="xtlo-settings-pagination">
-        <button class="xtlo-settings-page-btn" data-action="prev-page" ${currentPage <= 1 ? 'disabled' : ''} aria-label="前のページ">‹</button>
-        <div class="xtlo-settings-page-indicator">
-          <input class="xtlo-settings-page-current" data-role="page-input" inputmode="numeric" value="${currentPage}" aria-label="現在のページ" />
-          <div>/ ${totalPages}</div>
-        </div>
-        <button class="xtlo-settings-page-btn" data-action="next-page" ${currentPage >= totalPages ? 'disabled' : ''} aria-label="次のページ">›</button>
+      <div class="xtlo-settings-search-row">
+        <input class="xtlo-settings-search-input" type="search" data-role="search-input" value="${escapeAttribute(searchQuery)}" placeholder="登録済み項目を検索" aria-label="登録済み項目を検索" />
       </div>
+      ${renderPagination(currentPage, totalPages)}
+      <div class="xtlo-settings-list">${listMarkup}</div>
+      ${renderPagination(currentPage, totalPages)}
     `;
 
       footer.innerHTML = `
       <button class="xtlo-settings-clear" data-action="clear-all">${actions.clearLabel}</button>
-      <div class="xtlo-settings-badge">${getFooterBadgeLabel(currentTab, totalItems)}</div>
+      <div class="xtlo-settings-badge">${getFilteredFooterBadgeLabel(currentTab, filteredItems.length, totalItems)}</div>
     `;
     }
 
@@ -2457,7 +2688,10 @@
       await actions.removeItem(value);
       reapplyFilters();
 
-      const remainingCount = getItemsForTab(currentTab).length;
+      const remainingCount = filterItemsByQuery(
+        getItemsForTab(currentTab),
+        searchByTab[currentTab] ?? ''
+      ).length;
       const maxPage = Math.max(1, Math.ceil(remainingCount / PAGE_SIZE));
       pageByTab[currentTab] = Math.min(pageByTab[currentTab], maxPage);
       render();
@@ -2493,12 +2727,35 @@
      * 2. 補正後の値を state と表示へ反映する
      */
     function applyPageInput (rawValue) {
-      const totalItems = getTabActions(currentTab).items.length;
-      const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+      const filteredItems = filterItemsByQuery(
+        getTabActions(currentTab).items,
+        searchByTab[currentTab] ?? ''
+      );
+      const totalPages = Math.max(1, Math.ceil(filteredItems.length / PAGE_SIZE));
       const normalizedPage = normalizePageNumber(rawValue, totalPages);
 
       pageByTab[currentTab] = normalizedPage;
       render();
+    }
+
+    /**
+     * 現在タブの検索語を更新して一覧を絞り込む。
+     * 入力: 検索入力欄の文字列。
+     * 出力: なし。
+     * 主な処理内容:
+     * 1. タブごとに検索語を保持する
+     * 2. 検索結果が変わったとき空ページへ残らないようページ番号を 1 に戻す
+     */
+    function applySearchInput (rawValue) {
+      searchByTab[currentTab] = rawValue;
+      pageByTab[currentTab] = 1;
+      render();
+
+      const searchInput = overlay.querySelector('[data-role="search-input"]');
+      if (searchInput) {
+        searchInput.focus();
+        searchInput.setSelectionRange(rawValue.length, rawValue.length);
+      }
     }
 
     /**
@@ -2515,7 +2772,9 @@
         return
       }
 
-      const target = event.target.closest('[data-action], .xtlo-settings-tab, .xtlo-settings-close');
+      const target = event.target.closest(
+        '[data-action], .xtlo-settings-category-tab, .xtlo-settings-side-tab, .xtlo-settings-close'
+      );
       if (!target) return
 
       if (target.classList.contains('xtlo-settings-close')) {
@@ -2523,7 +2782,13 @@
         return
       }
 
-      if (target.classList.contains('xtlo-settings-tab')) {
+      if (target.classList.contains('xtlo-settings-category-tab')) {
+        currentTab = getDefaultTabForCategory(target.dataset.category);
+        render();
+        return
+      }
+
+      if (target.classList.contains('xtlo-settings-side-tab')) {
         currentTab = target.dataset.tab;
         render();
         return
@@ -2626,11 +2891,30 @@
      * 2. 不正値を補正して再描画する
      */
     function handleOverlayChange (event) {
-      if (event.target.dataset.role !== 'page-input') {
+      if (event.target.dataset.role === 'page-input') {
+        applyPageInput(event.target.value);
         return
       }
 
-      applyPageInput(event.target.value);
+      if (event.target.dataset.role === 'search-input') {
+        applySearchInput(event.target.value);
+      }
+    }
+
+    /**
+     * input イベントから検索欄の入力を即時反映する。
+     * 入力: input イベント。
+     * 出力: なし。
+     * 主な処理内容:
+     * 1. 検索欄の入力だけを拾う
+     * 2. 入力途中でも一覧を絞り込めるよう即時再描画する
+     */
+    function handleOverlayInput (event) {
+      if (event.target.dataset.role !== 'search-input') {
+        return
+      }
+
+      applySearchInput(event.target.value);
     }
 
     /**
@@ -2649,17 +2933,15 @@
       overlay.innerHTML = `
       <div class="xtlo-settings-dialog" role="dialog" aria-modal="true" aria-label="X-Observer 設定">
         <div class="xtlo-settings-header">
-          <div class="xtlo-settings-title">X-Observer</div>
-          <button class="xtlo-settings-close" aria-label="閉じる">×</button>
-        </div>
-        <div class="xtlo-settings-tabs">
-          ${TAB_DEFINITIONS.map((tab, index) => {
-            const prev = TAB_DEFINITIONS[index - 1];
-            const separator = prev && prev.category !== tab.category
-              ? '<div class="xtlo-settings-tab-separator" aria-hidden="true"></div>'
-              : '';
-            return `${separator}<button class="xtlo-settings-tab" data-tab="${tab.key}" data-active="false"><span class="xtlo-settings-tab-icon">${getListIcon(tab.key)}</span><span class="xtlo-settings-tab-label">${tab.label}</span></button>`
-          }).join('')}
+          <div class="xtlo-settings-header-row">
+            <div class="xtlo-settings-title">X-Observer</div>
+            <button class="xtlo-settings-close" aria-label="閉じる">×</button>
+          </div>
+          <div class="xtlo-settings-category-tabs">
+            ${CATEGORY_DEFINITIONS.map(category => `
+              <button class="xtlo-settings-category-tab" data-category="${category.key}" data-active="false">${category.label}</button>
+            `).join('')}
+          </div>
         </div>
         <div class="xtlo-settings-body"></div>
         <div class="xtlo-settings-footer"></div>
@@ -2684,6 +2966,14 @@
         } catch (error) {
           console.error('[X-Observer] 設定ダイアログのページ変更に失敗しました:', error);
           alert(`設定ダイアログのページ変更に失敗しました: ${error.message}`);
+        }
+      });
+      overlay.addEventListener('input', event => {
+        try {
+          handleOverlayInput(event);
+        } catch (error) {
+          console.error('[X-Observer] 設定ダイアログの検索に失敗しました:', error);
+          alert(`設定ダイアログの検索に失敗しました: ${error.message}`);
         }
       });
     }
