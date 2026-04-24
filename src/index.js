@@ -11,6 +11,8 @@ import {
 import { createSettingsDialog } from './features/settingsDialog.js'
 import { registerMenuCommands } from './features/tampermonkeyMenu.js'
 import {
+  addCustomCategoryUser,
+  addCustomUserCategory,
   addFollowUser,
   addHiddenStatus,
   addHiddenUser,
@@ -19,12 +21,15 @@ import {
   addMediaFilterList,
   config,
   loadConfig,
+  removeCustomCategoryUser,
+  removeCustomUserCategory,
   removeFollowUser,
   removeHiddenStatus,
   removeHiddenUser,
   removeHiddenWord,
   removeListUser,
   removeMediaFilterList,
+  setCustomUserCategoryColor,
   setAutoRefreshEnabled,
   setHideUIEnabled,
   showConfig
@@ -106,6 +111,11 @@ import { exportConfigToFile, importConfigFromFile } from './state/importExport.j
       removeFollowUser,
       addListUser,
       removeListUser,
+      addCustomUserCategory,
+      removeCustomUserCategory,
+      addCustomCategoryUser,
+      removeCustomCategoryUser,
+      setCustomUserCategoryColor,
       addHiddenWord,
       removeHiddenWord,
       addMediaFilterList,
@@ -136,6 +146,8 @@ import { exportConfigToFile, importConfigFromFile } from './state/importExport.j
       addHiddenUser,
       addFollowUser,
       addListUser,
+      addCustomCategoryUser,
+      config,
       reapplyFilters: processor.reapplyFilters
     })
 
@@ -156,6 +168,11 @@ import { exportConfigToFile, importConfigFromFile } from './state/importExport.j
       removeFollowUser,
       addListUser,
       removeListUser,
+      addCustomUserCategory,
+      removeCustomUserCategory,
+      addCustomCategoryUser,
+      removeCustomCategoryUser,
+      setCustomUserCategoryColor,
       addHiddenWord,
       removeHiddenWord,
       addHiddenStatus,

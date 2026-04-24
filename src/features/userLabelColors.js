@@ -1,5 +1,7 @@
 const FOLLOW_LABEL_CLASS = 'xtlo-user-label-follow'
 const LIST_LABEL_CLASS = 'xtlo-user-label-list'
+const CUSTOM_LABEL_CLASS = 'xtlo-user-label-custom'
+const CUSTOM_LABEL_COLORS = ['#f5c542', '#ff7a59', '#b17cff', '#00c2a8', '#ff6fae', '#9ad66b']
 const USER_LABEL_CSS = `
   .${FOLLOW_LABEL_CLASS} {
     color: #1d9bf0 !important;
@@ -7,6 +9,10 @@ const USER_LABEL_CSS = `
 
   .${LIST_LABEL_CLASS} {
     color: #33c46a !important;
+  }
+
+  .${CUSTOM_LABEL_CLASS} {
+    color: var(--xtlo-user-label-color, #f5c542) !important;
   }
 `
 
@@ -17,7 +23,7 @@ let styleInjected = false
  * 入力: なし
  * 出力: なし
  * 主な処理内容:
- * 1. フォロー用とリストイン用の色を定義する
+ * 1. フォロー、リスト、ユーザー定義分類用の色を定義する
  * 2. 多重挿入を防ぐ
  */
 export function applyUserLabelStyles () {
@@ -30,20 +36,31 @@ export function applyUserLabelStyles () {
 /**
  * 設定から対象ユーザーの色分類を返す。
  * 入力: ユーザー ID、現在設定
- * 出力: follow / list / null
+ * 出力: 分類種別と色。該当しない場合は null。
  * 主な処理内容:
- * 1. フォロー分類を最優先する
- * 2. どちらにも無い場合は null を返す
+ * 1. フォロー分類、リスト分類、ユーザー定義分類の順に判定する
+ * 2. ユーザー定義分類は設定色を使い、未設定時だけ登録順の既定色へ戻す
  */
 function getUserLabelType (userId, config) {
   if (!userId) return null
 
   if (config.followUserIds.includes(userId)) {
-    return 'follow'
+    return { type: 'follow' }
   }
 
   if (config.listUserIds.includes(userId)) {
-    return 'list'
+    return { type: 'list' }
+  }
+
+  const customCategoryIndex = config.customUserCategories.findIndex(category =>
+    category.userIds.includes(userId)
+  )
+  if (customCategoryIndex >= 0) {
+    const customCategory = config.customUserCategories[customCategoryIndex]
+    return {
+      type: 'custom',
+      color: customCategory.color || CUSTOM_LABEL_COLORS[customCategoryIndex % CUSTOM_LABEL_COLORS.length]
+    }
   }
 
   return null
@@ -97,15 +114,16 @@ function findUserIdSpan (link, userId) {
  */
 function clearUserLabelClasses (container) {
   container
-    .querySelectorAll(`.${FOLLOW_LABEL_CLASS}, .${LIST_LABEL_CLASS}`)
+    .querySelectorAll(`.${FOLLOW_LABEL_CLASS}, .${LIST_LABEL_CLASS}, .${CUSTOM_LABEL_CLASS}`)
     .forEach(element => {
-      element.classList.remove(FOLLOW_LABEL_CLASS, LIST_LABEL_CLASS)
+      element.classList.remove(FOLLOW_LABEL_CLASS, LIST_LABEL_CLASS, CUSTOM_LABEL_CLASS)
+      element.style.removeProperty('--xtlo-user-label-color')
     })
 }
 
 /**
  * 対象コンテナ内で特定ユーザーの @userId 表示へ色分類を反映する。
- * 入力: 描画対象コンテナ、ユーザー ID、分類
+ * 入力: 描画対象コンテナ、ユーザー ID、分類情報
  * 出力: なし
  * 主な処理内容:
  * 1. 対応するプロフィールリンクを探す
@@ -114,8 +132,11 @@ function clearUserLabelClasses (container) {
 function applyLabelToUserInContainer (container, userId, labelType) {
   if (!userId || !labelType) return
 
-  const className =
-    labelType === 'follow' ? FOLLOW_LABEL_CLASS : LIST_LABEL_CLASS
+  const className = labelType.type === 'follow'
+    ? FOLLOW_LABEL_CLASS
+    : labelType.type === 'list'
+      ? LIST_LABEL_CLASS
+      : CUSTOM_LABEL_CLASS
   const links = container.querySelectorAll('a[href^="/"]')
 
   for (const link of links) {
@@ -127,6 +148,9 @@ function applyLabelToUserInContainer (container, userId, labelType) {
     const userIdSpan = findUserIdSpan(link, userId)
     if (userIdSpan) {
       userIdSpan.classList.add(className)
+      if (labelType.type === 'custom') {
+        userIdSpan.style.setProperty('--xtlo-user-label-color', labelType.color)
+      }
     }
   }
 }

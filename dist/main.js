@@ -37,7 +37,7 @@
 
   // 設定 JSON の互換性判定に使う形式バージョン。
   // 形式変更時は import 側の検証と必ずセットで更新する。
-  const EXPORT_VERSION = 3;
+  const EXPORT_VERSION = 4;
 
   // Tampermonkey ストレージの保存キー一覧。
   // モジュール分割後もキー名を散らさず、互換性影響をここで追えるようにしている。
@@ -46,6 +46,7 @@
     hiddenUserIds: 'xtlo_hiddenUserIds',
     followUserIds: 'xtlo_followUserIds',
     listUserIds: 'xtlo_listUserIds',
+    customUserCategories: 'xtlo_customUserCategories',
     hiddenWords: 'xtlo_hiddenWords',
     hiddenStatuses: 'xtlo_hiddenStatuses',
     hideUIEnabled: 'xtlo_hideUIEnabled',
@@ -424,6 +425,8 @@
 
   const FOLLOW_LABEL_CLASS = 'xtlo-user-label-follow';
   const LIST_LABEL_CLASS = 'xtlo-user-label-list';
+  const CUSTOM_LABEL_CLASS = 'xtlo-user-label-custom';
+  const CUSTOM_LABEL_COLORS = ['#f5c542', '#ff7a59', '#b17cff', '#00c2a8', '#ff6fae', '#9ad66b'];
   const USER_LABEL_CSS = `
   .${FOLLOW_LABEL_CLASS} {
     color: #1d9bf0 !important;
@@ -431,6 +434,10 @@
 
   .${LIST_LABEL_CLASS} {
     color: #33c46a !important;
+  }
+
+  .${CUSTOM_LABEL_CLASS} {
+    color: var(--xtlo-user-label-color, #f5c542) !important;
   }
 `;
 
@@ -441,7 +448,7 @@
    * 入力: なし
    * 出力: なし
    * 主な処理内容:
-   * 1. フォロー用とリストイン用の色を定義する
+   * 1. フォロー、リスト、ユーザー定義分類用の色を定義する
    * 2. 多重挿入を防ぐ
    */
   function applyUserLabelStyles () {
@@ -454,20 +461,31 @@
   /**
    * 設定から対象ユーザーの色分類を返す。
    * 入力: ユーザー ID、現在設定
-   * 出力: follow / list / null
+   * 出力: 分類種別と色。該当しない場合は null。
    * 主な処理内容:
-   * 1. フォロー分類を最優先する
-   * 2. どちらにも無い場合は null を返す
+   * 1. フォロー分類、リスト分類、ユーザー定義分類の順に判定する
+   * 2. ユーザー定義分類は設定色を使い、未設定時だけ登録順の既定色へ戻す
    */
   function getUserLabelType (userId, config) {
     if (!userId) return null
 
     if (config.followUserIds.includes(userId)) {
-      return 'follow'
+      return { type: 'follow' }
     }
 
     if (config.listUserIds.includes(userId)) {
-      return 'list'
+      return { type: 'list' }
+    }
+
+    const customCategoryIndex = config.customUserCategories.findIndex(category =>
+      category.userIds.includes(userId)
+    );
+    if (customCategoryIndex >= 0) {
+      const customCategory = config.customUserCategories[customCategoryIndex];
+      return {
+        type: 'custom',
+        color: customCategory.color || CUSTOM_LABEL_COLORS[customCategoryIndex % CUSTOM_LABEL_COLORS.length]
+      }
     }
 
     return null
@@ -521,15 +539,16 @@
    */
   function clearUserLabelClasses (container) {
     container
-      .querySelectorAll(`.${FOLLOW_LABEL_CLASS}, .${LIST_LABEL_CLASS}`)
+      .querySelectorAll(`.${FOLLOW_LABEL_CLASS}, .${LIST_LABEL_CLASS}, .${CUSTOM_LABEL_CLASS}`)
       .forEach(element => {
-        element.classList.remove(FOLLOW_LABEL_CLASS, LIST_LABEL_CLASS);
+        element.classList.remove(FOLLOW_LABEL_CLASS, LIST_LABEL_CLASS, CUSTOM_LABEL_CLASS);
+        element.style.removeProperty('--xtlo-user-label-color');
       });
   }
 
   /**
    * 対象コンテナ内で特定ユーザーの @userId 表示へ色分類を反映する。
-   * 入力: 描画対象コンテナ、ユーザー ID、分類
+   * 入力: 描画対象コンテナ、ユーザー ID、分類情報
    * 出力: なし
    * 主な処理内容:
    * 1. 対応するプロフィールリンクを探す
@@ -538,8 +557,11 @@
   function applyLabelToUserInContainer (container, userId, labelType) {
     if (!userId || !labelType) return
 
-    const className =
-      labelType === 'follow' ? FOLLOW_LABEL_CLASS : LIST_LABEL_CLASS;
+    const className = labelType.type === 'follow'
+      ? FOLLOW_LABEL_CLASS
+      : labelType.type === 'list'
+        ? LIST_LABEL_CLASS
+        : CUSTOM_LABEL_CLASS;
     const links = container.querySelectorAll('a[href^="/"]');
 
     for (const link of links) {
@@ -551,6 +573,9 @@
       const userIdSpan = findUserIdSpan(link, userId);
       if (userIdSpan) {
         userIdSpan.classList.add(className);
+        if (labelType.type === 'custom') {
+          userIdSpan.style.setProperty('--xtlo-user-label-color', labelType.color);
+        }
       }
     }
   }
@@ -633,6 +658,8 @@
     return null
   }
 
+  const DEFAULT_CUSTOM_CATEGORY_COLOR$1 = '#f5c542';
+
   // 現在の設定を一か所に集約して持つ。
   // オブジェクト自体を差し替えると参照先が古いまま残るため、各モジュールはこの中身を書き換える前提で共有する。
   const config = {
@@ -640,6 +667,7 @@
     hiddenUserIds: [],
     followUserIds: [],
     listUserIds: [],
+    customUserCategories: [],
     hiddenWords: [],
     hiddenStatuses: [],
     hideUIEnabled: true,
@@ -659,6 +687,7 @@
     config.hiddenUserIds = nextConfig.hiddenUserIds;
     config.followUserIds = nextConfig.followUserIds;
     config.listUserIds = nextConfig.listUserIds;
+    config.customUserCategories = nextConfig.customUserCategories;
     config.hiddenWords = nextConfig.hiddenWords;
     config.hiddenStatuses = nextConfig.hiddenStatuses;
     config.hideUIEnabled = nextConfig.hideUIEnabled;
@@ -680,6 +709,7 @@
       [STORAGE_KEYS.hiddenUserIds]: [],
       [STORAGE_KEYS.followUserIds]: [],
       [STORAGE_KEYS.listUserIds]: [],
+      [STORAGE_KEYS.customUserCategories]: [],
       [STORAGE_KEYS.hiddenWords]: [],
       [STORAGE_KEYS.hiddenStatuses]: [],
       [STORAGE_KEYS.hideUIEnabled]: true,
@@ -691,6 +721,7 @@
       hiddenUserIds: stored[STORAGE_KEYS.hiddenUserIds],
       followUserIds: stored[STORAGE_KEYS.followUserIds],
       listUserIds: stored[STORAGE_KEYS.listUserIds],
+      customUserCategories: stored[STORAGE_KEYS.customUserCategories],
       hiddenWords: stored[STORAGE_KEYS.hiddenWords],
       hiddenStatuses: stored[STORAGE_KEYS.hiddenStatuses],
       hideUIEnabled: stored[STORAGE_KEYS.hideUIEnabled],
@@ -741,6 +772,7 @@
       hiddenUserIds: nextConfig.hiddenUserIds,
       followUserIds: nextConfig.followUserIds,
       listUserIds: nextConfig.listUserIds,
+      customUserCategories: nextConfig.customUserCategories,
       hiddenWords: nextConfig.hiddenWords,
       hiddenStatuses: nextConfig.hiddenStatuses,
       hideUIEnabled: nextConfig.hideUIEnabled,
@@ -752,6 +784,7 @@
       [STORAGE_KEYS.hiddenUserIds]: config.hiddenUserIds,
       [STORAGE_KEYS.followUserIds]: config.followUserIds,
       [STORAGE_KEYS.listUserIds]: config.listUserIds,
+      [STORAGE_KEYS.customUserCategories]: config.customUserCategories,
       [STORAGE_KEYS.hiddenWords]: config.hiddenWords,
       [STORAGE_KEYS.hiddenStatuses]: config.hiddenStatuses,
       [STORAGE_KEYS.hideUIEnabled]: config.hideUIEnabled,
@@ -785,6 +818,53 @@
    */
   function normalizeUserId (userId) {
     return userId.trim().replace(/^@/, '')
+  }
+
+
+  /**
+   * 分類色を保存用の HEX カラーへ正規化する。
+   * 入力: ユーザーが選んだ色文字列。
+   * 出力: #rrggbb 形式の色。未指定や不正値は既定色。
+   * 主な処理内容:
+   * 1. color input とインポート値を同じ形式へ揃える
+   * 2. CSS へ直接渡す値なので HEX 形式以外は既定色へ戻す
+   */
+  function normalizeCategoryColor$1 (color) {
+    const normalized = String(color || '').trim().toLowerCase();
+    return /^#[0-9a-f]{6}$/.test(normalized)
+      ? normalized
+      : DEFAULT_CUSTOM_CATEGORY_COLOR$1
+  }
+
+
+  /**
+   * ユーザー定義分類 ID を生成する。
+   * 入力: 分類名。
+   * 出力: 保存に使う分類 ID。
+   * 主な処理内容:
+   * 1. 分類名を小文字化して URL セーフ寄りの文字へ置き換える
+   * 2. 同名分類が重なった場合も衝突しないよう時刻を付ける
+   */
+  function createCustomUserCategoryId (label) {
+    const base = label
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40);
+
+    return `custom-${base || 'category'}-${Date.now().toString(36)}`
+  }
+
+  /**
+   * ユーザー定義分類を ID で探す。
+   * 入力: 分類 ID。
+   * 出力: 分類オブジェクト。見つからない場合は null。
+   * 主な処理内容:
+   * 1. customUserCategories から ID が一致する分類を返す
+   */
+  function findCustomUserCategory (categoryId) {
+    return config.customUserCategories.find(category => category.id === categoryId) ?? null
   }
 
   /**
@@ -880,6 +960,114 @@
     config.listUserIds = config.listUserIds.filter(user => user !== id);
     await saveKey('listUserIds');
     console.log(`[X-Observer] リストインユーザー削除: @${id}`);
+  }
+
+
+  /**
+   * ユーザー定義分類を追加する。
+   * 入力: 追加したい分類名と任意の分類色。
+   * 出力: 作成した分類オブジェクト。空名または重複名なら null。
+   * 主な処理内容:
+   * 1. 分類名を trim して空入力を除外する
+   * 2. 既存分類名と重複しない場合だけ ID、色、空のユーザー配列を保存する
+   */
+  async function addCustomUserCategory (label, color = DEFAULT_CUSTOM_CATEGORY_COLOR$1) {
+    const normalizedLabel = label.trim();
+    if (
+      !normalizedLabel ||
+      config.customUserCategories.some(category => category.label === normalizedLabel)
+    ) {
+      return null
+    }
+
+    const category = {
+      id: createCustomUserCategoryId(normalizedLabel),
+      label: normalizedLabel,
+      color: normalizeCategoryColor$1(color),
+      userIds: []
+    };
+
+    config.customUserCategories.push(category);
+    await saveKey('customUserCategories');
+    console.log(`[X-Observer] ユーザー定義分類追加: ${normalizedLabel}`);
+    return category
+  }
+
+  /**
+   * ユーザー定義分類を削除する。
+   * 入力: 削除したい分類 ID。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. ID が一致しない分類だけを残す
+   * 2. 分類に紐づくユーザー ID も分類ごと削除して保存する
+   */
+  async function removeCustomUserCategory (categoryId) {
+    const category = findCustomUserCategory(categoryId);
+    config.customUserCategories = config.customUserCategories.filter(
+      item => item.id !== categoryId
+    );
+    await saveKey('customUserCategories');
+    console.log(`[X-Observer] ユーザー定義分類削除: ${category?.label ?? categoryId}`);
+  }
+
+
+  /**
+   * ユーザー定義分類の色を変更する。
+   * 入力: 分類 ID、#rrggbb 形式の色。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. 分類 ID から更新対象を探す
+   * 2. 色を安全な HEX 形式へ正規化して保存する
+   */
+  async function setCustomUserCategoryColor (categoryId, color) {
+    const category = findCustomUserCategory(categoryId);
+    if (!category) {
+      return
+    }
+
+    category.color = normalizeCategoryColor$1(color);
+    await saveKey('customUserCategories');
+    console.log(`[X-Observer] ${category.label}分類色変更: ${category.color}`);
+  }
+
+  /**
+   * ユーザー定義分類へユーザー ID を追加する。
+   * 入力: 分類 ID、@ の有無どちらでもよいユーザー ID。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. 分類 ID から保存先を探す
+   * 2. ユーザー ID を正規化し、未登録時だけ追加して保存する
+   */
+  async function addCustomCategoryUser (categoryId, userId) {
+    const category = findCustomUserCategory(categoryId);
+    const id = normalizeUserId(userId);
+    if (!category || !id || category.userIds.includes(id)) {
+      return
+    }
+
+    category.userIds.push(id);
+    await saveKey('customUserCategories');
+    console.log(`[X-Observer] ${category.label}ユーザー追加: @${id}`);
+  }
+
+  /**
+   * ユーザー定義分類からユーザー ID を削除する。
+   * 入力: 分類 ID、@ の有無どちらでもよいユーザー ID。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. 分類 ID から保存先を探す
+   * 2. 正規化したユーザー ID と一致しない項目だけを残す
+   */
+  async function removeCustomCategoryUser (categoryId, userId) {
+    const category = findCustomUserCategory(categoryId);
+    const id = normalizeUserId(userId);
+    if (!category || !id) {
+      return
+    }
+
+    category.userIds = category.userIds.filter(user => user !== id);
+    await saveKey('customUserCategories');
+    console.log(`[X-Observer] ${category.label}ユーザー削除: @${id}`);
   }
 
   /**
@@ -1277,6 +1465,22 @@
   }
 
   /**
+   * HTML へ埋め込む文字列をエスケープする。
+   * 入力: 表示したい文字列。
+   * 出力: HTML として解釈されない安全な文字列。
+   * 主な処理内容:
+   * 1. ユーザー定義分類名が DOM 構造を壊さないよう特殊文字を置き換える
+   */
+  function escapeHtml$1 (value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;')
+  }
+
+  /**
    * X 標準ドロップダウンを React の onDismiss 経由で閉じる。
    * 入力: role="menu" の要素
    * 出力: なし
@@ -1321,7 +1525,7 @@
         </g>
       </svg>
     </div>
-    <div class="xtlo-label">${label}</div>
+    <div class="xtlo-label">${escapeHtml$1(label)}</div>
   `;
 
     menuItem.addEventListener('click', async event => {
@@ -1335,18 +1539,21 @@
 
   /**
    * 投稿の「...」メニューへ独自の非表示項目を注入する監視を開始する。
-   * 入力: 投稿・ユーザーの非表示登録関数と再適用関数
+   * 入力: 投稿・ユーザーの非表示登録関数、分類登録関数、現在設定、再適用関数
    * 出力: MutationObserver
    * 主な処理内容:
    * 1. 直前に押された caret を記録する
    * 2. menu 出現を監視する
    * 3. 対象投稿の statusId / userId を使って独自 menuitem を注入する
+   * 4. ユーザー定義分類があれば分類追加項目も注入する
    */
   function setupDropdownHideMenu ({
     addHiddenStatus,
     addHiddenUser,
     addFollowUser,
     addListUser,
+    addCustomCategoryUser,
+    config,
     reapplyFilters
   }) {
     // X 標準メニューは「どの投稿から開いたか」を直接渡してこないため、直前クリックを手掛かりにする。
@@ -1364,10 +1571,13 @@
     );
 
     /**
-     * 対象 menu へ「このポストを非表示」「このユーザーを非表示」項目を差し込む。
+     * 対象 menu へ追加分類や非表示の独自項目を差し込む。
      * 入力: role="menu" の要素
      * 出力: なし
-     * 主な処理内容: 直前 caret に対応する article を見つけ、投稿 ID とユーザー ID ごとの項目を追加する
+     * 主な処理内容:
+     * 1. 直前 caret に対応する article を見つける
+     * 2. ユーザー ID があればフォロー、リスト、ユーザー定義分類、ユーザー非表示を追加する
+     * 3. 投稿 ID があればポスト非表示を追加する
      */
     function injectHideMenuItem (menu) {
       if (
@@ -1426,6 +1636,29 @@
             }
           })
         );
+
+        for (const category of config.customUserCategories) {
+          menu.appendChild(
+            createDropdownMenuItem({
+              className: 'xtlo-hide-post-menuitem',
+              label: `分類「${category.label}」に追加 (@${info.userId})`,
+              onSelect: async menuItem => {
+                const dropdownMenu = menuItem.closest('[role="menu"]');
+
+                await addCustomCategoryUser(category.id, info.userId);
+                reapplyFilters();
+
+                if (dropdownMenu) {
+                  closeDropdownMenu(dropdownMenu);
+                }
+
+                console.log(
+                  `[X-Observer] メニューから${category.label}分類へユーザーを追加しました: @${info.userId}`
+                );
+              }
+            })
+          );
+        }
 
         menu.appendChild(
           createDropdownMenuItem({
@@ -1539,6 +1772,8 @@
   }
 
   const PAGE_SIZE = 500;
+  const CUSTOM_TAB_PREFIX = 'custom:';
+  const DEFAULT_CUSTOM_CATEGORY_COLOR = '#f5c542';
   const TAB_DEFINITIONS = [
     { key: 'users',    label: 'ユーザー',   placeholder: '[@]user_id',    category: 'hide' },
     { key: 'statuses', label: 'ポスト',     placeholder: 'post_id / URL', category: 'hide' },
@@ -1546,13 +1781,75 @@
     { key: 'media',    label: 'メディア',   placeholder: 'リスト名',      category: 'hide' },
     { key: 'follow',   label: 'フォロー',   placeholder: '[@]user_id',    category: 'color' },
     { key: 'list',     label: 'リスト',     placeholder: '[@]user_id',    category: 'color' },
-    { key: 'settings', label: '設定',       placeholder: '',              category: 'settings' }
+    { key: 'settings', label: '基本',       placeholder: '',              category: 'settings' },
+    { key: 'categorySettings', label: '分類', placeholder: '',             category: 'settings' }
   ];
   const CATEGORY_DEFINITIONS = [
     { key: 'hide',     label: '非表示' },
     { key: 'color',    label: '分類' },
     { key: 'settings', label: '設定' }
   ];
+
+
+  /**
+   * ユーザー定義分類のタブキーを作る。
+   * 入力: 分類 ID。
+   * 出力: 設定ダイアログ内で使うタブキー。
+   * 主な処理内容:
+   * 1. 既存タブと衝突しないよう専用プレフィックスを付ける
+   */
+  function getCustomCategoryTabKey (categoryId) {
+    return `${CUSTOM_TAB_PREFIX}${categoryId}`
+  }
+
+  /**
+   * タブキーからユーザー定義分類 ID を取り出す。
+   * 入力: タブキー。
+   * 出力: 分類 ID。ユーザー定義分類でなければ null。
+   * 主な処理内容:
+   * 1. 専用プレフィックスを持つタブだけ分類 ID として扱う
+   */
+  function getCustomCategoryIdFromTabKey (tabKey) {
+    return tabKey.startsWith(CUSTOM_TAB_PREFIX)
+      ? tabKey.slice(CUSTOM_TAB_PREFIX.length)
+      : null
+  }
+
+  /**
+   * タブキーに対応するユーザー定義分類を返す。
+   * 入力: タブキー。
+   * 出力: 分類オブジェクト。該当しなければ null。
+   * 主な処理内容:
+   * 1. タブキーから分類 ID を取り出す
+   * 2. 現在の config から一致する分類を探す
+   */
+  function getCustomCategoryForTab (tabKey) {
+    const categoryId = getCustomCategoryIdFromTabKey(tabKey);
+    if (!categoryId) return null
+
+    return config.customUserCategories.find(category => category.id === categoryId) ?? null
+  }
+
+  /**
+   * 固定タブとユーザー定義分類タブを合わせて返す。
+   * 入力: なし。
+   * 出力: タブ定義配列。
+   * 主な処理内容:
+   * 1. 固定タブを先に並べる
+   * 2. ユーザー定義分類を分類カテゴリの小項目として追加する
+   */
+  function getAllTabDefinitions () {
+    return [
+      ...TAB_DEFINITIONS,
+      ...config.customUserCategories.map(category => ({
+        key: getCustomCategoryTabKey(category.id),
+        label: category.label,
+        placeholder: '[@]user_id',
+        category: 'color',
+        customCategoryId: category.id
+      }))
+    ]
+  }
 
   const DIALOG_STYLE = `
   .xtlo-settings-overlay {
@@ -1717,6 +2014,79 @@
   .xtlo-settings-side-icon svg {
     width: 100%;
     height: 100%;
+  }
+
+
+  .xtlo-settings-side-tab-label {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .xtlo-settings-category-manager {
+    display: grid;
+    gap: 14px;
+  }
+
+  .xtlo-settings-category-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px auto;
+    gap: 10px;
+    padding: 8px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .xtlo-settings-color-input {
+    width: 44px;
+    height: 36px;
+    padding: 4px;
+    border: 0;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.12);
+    cursor: pointer;
+  }
+
+  .xtlo-settings-category-list {
+    display: grid;
+    gap: 8px;
+  }
+
+  .xtlo-settings-category-row {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) 44px 34px;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.07);
+  }
+
+  .xtlo-settings-category-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.16);
+  }
+
+  .xtlo-settings-category-meta {
+    min-width: 0;
+  }
+
+  .xtlo-settings-category-name {
+    overflow: hidden;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .xtlo-settings-category-count {
+    color: rgba(255, 255, 255, 0.52);
+    font-size: 12px;
   }
 
   .xtlo-settings-content {
@@ -2124,6 +2494,16 @@
       }))
     }
 
+
+    const customCategory = getCustomCategoryForTab(tabKey);
+    if (customCategory) {
+      return customCategory.userIds.map(value => ({
+        value,
+        title: `@${value}`,
+        subtitle: `${customCategory.label}ユーザー`
+      }))
+    }
+
     if (tabKey === 'statuses') {
       return config.hiddenStatuses.map(entry => ({
         value: entry.statusId,
@@ -2152,10 +2532,14 @@
    * 入力: 小項目のタブキー。
    * 出力: 大分類キー。見つからない場合は非表示分類。
    * 主な処理内容:
-   * 1. TAB_DEFINITIONS から現在タブの定義を探す
-   * 2. 見つからない場合も UI が壊れないよう既定分類へ戻す
+   * 1. ユーザー定義分類タブは分類カテゴリへ固定する
+   * 2. 固定タブは TAB_DEFINITIONS から現在タブの定義を探す
    */
   function getCategoryKeyForTab (tabKey) {
+    if (getCustomCategoryIdFromTabKey(tabKey)) {
+      return 'color'
+    }
+
     return TAB_DEFINITIONS.find(tab => tab.key === tabKey)?.category ?? 'hide'
   }
 
@@ -2164,10 +2548,10 @@
    * 入力: 大分類キー。
    * 出力: 該当する小項目定義配列。
    * 主な処理内容:
-   * 1. category が一致する TAB_DEFINITIONS のみを抽出する
+   * 1. 固定タブとユーザー定義分類タブから category が一致するものだけを抽出する
    */
   function getTabsForCategory (categoryKey) {
-    return TAB_DEFINITIONS.filter(tab => tab.category === categoryKey)
+    return getAllTabDefinitions().filter(tab => tab.category === categoryKey)
   }
 
   /**
@@ -2220,6 +2604,11 @@
     removeFollowUser,
     addListUser,
     removeListUser,
+    addCustomUserCategory,
+    removeCustomUserCategory,
+    addCustomCategoryUser,
+    removeCustomCategoryUser,
+    setCustomUserCategoryColor,
     addHiddenWord,
     removeHiddenWord,
     addMediaFilterList,
@@ -2252,6 +2641,23 @@
       words: '',
       media: ''
     };
+
+
+    /**
+     * 動的タブ用のページ番号と検索語を初期化する。
+     * 入力: タブキー。
+     * 出力: なし。
+     * 主な処理内容:
+     * 1. ユーザー定義分類タブが後から増えても状態オブジェクトへ初期値を入れる
+     */
+    function ensureTabState (tabKey) {
+      if (!pageByTab[tabKey]) {
+        pageByTab[tabKey] = 1;
+      }
+      if (tabKey !== 'settings' && searchByTab[tabKey] === undefined) {
+        searchByTab[tabKey] = '';
+      }
+    }
 
     /**
      * ダイアログ共通スタイルを一度だけ挿入する。
@@ -2329,6 +2735,26 @@
         }
       }
 
+
+      const customCategory = getCustomCategoryForTab(tabKey);
+      if (customCategory) {
+        return {
+          items: getItemsForTab(tabKey),
+          addLabel: 'Add',
+          clearLabel: `Clear all ${customCategory.label}`,
+          totalLabel: 'Known Users',
+          addItem: async value => addCustomCategoryUser(customCategory.id, value),
+          removeItem: async value => removeCustomCategoryUser(customCategory.id, value),
+          clearAll: async () => {
+            for (const value of [...customCategory.userIds]) {
+              await removeCustomCategoryUser(customCategory.id, value);
+            }
+            reapplyFilters();
+          },
+          normalizeInput: value => value.replace(/^@/, '')
+        }
+      }
+
       if (tabKey === 'statuses') {
         return {
           items: getItemsForTab(tabKey),
@@ -2390,6 +2816,10 @@
      * 1. 設定タブだけは件数ではなく状態数として表現する
      */
     function getFooterBadgeLabel (tabKey, count) {
+      if (tabKey === 'categorySettings') {
+        return `${count} Categories`
+      }
+
       if (tabKey === 'settings') {
         return `${count} Settings`
       }
@@ -2424,9 +2854,9 @@
     function renderSideTabs (categoryKey) {
       return getTabsForCategory(categoryKey)
         .map(tab => `
-        <button class="xtlo-settings-side-tab" data-tab="${tab.key}" data-active="${String(tab.key === currentTab)}">
+        <button class="xtlo-settings-side-tab" data-tab="${escapeAttribute(tab.key)}" data-active="${String(tab.key === currentTab)}">
           <span class="xtlo-settings-side-icon">${getListIcon(tab.key)}</span>
-          <span>${tab.label}</span>
+          <span class="xtlo-settings-side-tab-label">${escapeHtml(tab.label)}</span>
         </button>
       `)
         .join('')
@@ -2512,6 +2942,14 @@
       `
       }
 
+      if (getCustomCategoryIdFromTabKey(tabKey) || tabKey === 'categorySettings') {
+        return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M12 3 3 8l9 5 9-5zm-6 8.2V16l6 3 6-3v-4.8l-6 3.3z"/>
+        </svg>
+      `
+      }
+
       if (tabKey === 'settings') {
         return `
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2527,6 +2965,44 @@
     `
     }
 
+
+    /**
+     * 分類管理タブの HTML を返す。
+     * 入力: なし。
+     * 出力: 分類追加フォームと既存分類一覧の HTML 文字列。
+     * 主な処理内容:
+     * 1. 分類名と色を指定して追加できるフォームを作る
+     * 2. 既存分類ごとに色変更と削除ボタンを配置する
+     */
+    function renderCategorySettings () {
+      const rows = config.customUserCategories.length
+        ? config.customUserCategories.map(category => `
+        <div class="xtlo-settings-category-row">
+          <span class="xtlo-settings-category-swatch" style="background: ${escapeAttribute(category.color || DEFAULT_CUSTOM_CATEGORY_COLOR)}"></span>
+          <div class="xtlo-settings-category-meta">
+            <div class="xtlo-settings-category-name">${escapeHtml(category.label)}</div>
+            <div class="xtlo-settings-category-count">${category.userIds.length} users</div>
+          </div>
+          <input class="xtlo-settings-color-input" type="color" data-action="set-category-color" data-category-id="${escapeAttribute(category.id)}" value="${escapeAttribute(category.color || DEFAULT_CUSTOM_CATEGORY_COLOR)}" aria-label="分類色" />
+          <button class="xtlo-settings-danger-icon" data-action="remove-category" data-category-id="${escapeAttribute(category.id)}" aria-label="分類を削除">
+            ${getTrashIcon()}
+          </button>
+        </div>
+      `).join('')
+        : '<div class="xtlo-settings-empty">まだ分類はありません。</div>';
+
+      return `
+      <div class="xtlo-settings-category-manager">
+        <div class="xtlo-settings-category-form">
+          <input class="xtlo-settings-input" type="text" data-role="category-input" placeholder="分類名" aria-label="分類名" />
+          <input class="xtlo-settings-color-input" type="color" data-role="category-color-input" value="${DEFAULT_CUSTOM_CATEGORY_COLOR}" aria-label="分類色" />
+          <button class="xtlo-settings-primary" data-action="add-category">Add</button>
+        </div>
+        <div class="xtlo-settings-category-list">${rows}</div>
+      </div>
+    `
+    }
+
     /**
      * 画面を再描画する。
      * 入力: なし。
@@ -2538,6 +3014,8 @@
      */
     function render () {
       if (!overlay) return
+
+      ensureTabState(currentTab);
 
       const body = overlay.querySelector('.xtlo-settings-body');
       const footer = overlay.querySelector('.xtlo-settings-footer');
@@ -2597,7 +3075,16 @@
         return
       }
 
-      const tabDefinition = TAB_DEFINITIONS.find(tab => tab.key === currentTab);
+      if (currentTab === 'categorySettings') {
+        content.innerHTML = renderCategorySettings();
+        footer.innerHTML = `
+        <div></div>
+        <div class="xtlo-settings-badge">${getFooterBadgeLabel('categorySettings', config.customUserCategories.length)}</div>
+      `;
+        return
+      }
+
+      const tabDefinition = getAllTabDefinitions().find(tab => tab.key === currentTab);
       const actions = getTabActions(currentTab);
       const totalItems = actions.items.length;
       const searchQuery = searchByTab[currentTab] ?? '';
@@ -2705,6 +3192,76 @@
      * 1. 確認ダイアログで誤操作を防ぐ
      * 2. タブごとの clearAll を実行して再描画する
      */
+
+    /**
+     * ユーザー定義分類を追加する。
+     * 入力: 分類設定タブの分類名と色入力欄。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. 分類名と色を読み取って保存コールバックへ渡す
+     * 2. 作成後は分類設定タブを再描画する
+     */
+    async function handleAddCategory () {
+      const input = overlay.querySelector('[data-role="category-input"]');
+      if (!input) return
+
+      const colorInput = overlay.querySelector('[data-role="category-color-input"]');
+      const label = input.value.trim();
+      const color = colorInput?.value || DEFAULT_CUSTOM_CATEGORY_COLOR;
+      if (!label) return
+
+      const category = await addCustomUserCategory(label, color);
+      if (!category) {
+        alert('分類名が空、または既に登録済みです');
+        return
+      }
+
+      input.value = '';
+      if (colorInput) {
+        colorInput.value = DEFAULT_CUSTOM_CATEGORY_COLOR;
+      }
+      render();
+    }
+
+    /**
+     * ユーザー定義分類を削除する。
+     * 入力: 分類 ID。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. 確認ダイアログで誤削除を防ぐ
+     * 2. 削除中の分類タブを開いていた場合は分類設定タブへ戻す
+     */
+    async function handleRemoveCategory (categoryId) {
+      const category = config.customUserCategories.find(item => item.id === categoryId);
+      if (!category) return
+
+      if (!confirm(`分類「${category.label}」を削除しますか？登録ユーザーもこの分類から削除されます。`)) {
+        return
+      }
+
+      await removeCustomUserCategory(categoryId);
+      reapplyFilters();
+      if (currentTab === getCustomCategoryTabKey(categoryId)) {
+        currentTab = 'categorySettings';
+      }
+      render();
+    }
+
+
+    /**
+     * ユーザー定義分類の色変更を保存する。
+     * 入力: 分類 ID と color input の値。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. 選択された色を保存コールバックへ渡す
+     * 2. 既存タイムラインの分類色を再適用する
+     */
+    async function handleSetCategoryColor (categoryId, color) {
+      await setCustomUserCategoryColor(categoryId, color);
+      reapplyFilters();
+      render();
+    }
+
     async function handleClearAll () {
       const actions = getTabActions(currentTab);
       if (actions.items.length === 0) return
@@ -2807,6 +3364,16 @@
         return
       }
 
+      if (action === 'add-category') {
+        await handleAddCategory();
+        return
+      }
+
+      if (action === 'remove-category') {
+        await handleRemoveCategory(target.dataset.categoryId);
+        return
+      }
+
       if (action === 'clear-all') {
         await handleClearAll();
         return
@@ -2866,6 +3433,15 @@
 
       if (
         event.key === 'Enter' &&
+        event.target.dataset.role === 'category-input'
+      ) {
+        event.preventDefault();
+        await handleAddCategory();
+        return
+      }
+
+      if (
+        event.key === 'Enter' &&
         event.target.classList.contains('xtlo-settings-input')
       ) {
         event.preventDefault();
@@ -2883,14 +3459,22 @@
     }
 
     /**
-     * change イベントからページ入力欄の変更を反映する。
+     * change イベントからページ入力欄や分類色の変更を反映する。
      * 入力: change イベント。
      * 出力: なし。
      * 主な処理内容:
-     * 1. ページ入力欄の変更だけを拾う
-     * 2. 不正値を補正して再描画する
+     * 1. 分類色の変更は保存してタイムラインへ再適用する
+     * 2. ページ入力欄は不正値を補正して再描画する
      */
     function handleOverlayChange (event) {
+      if (event.target.dataset.action === 'set-category-color') {
+        handleSetCategoryColor(event.target.dataset.categoryId, event.target.value).catch(error => {
+          console.error('[X-Observer] 分類色の変更に失敗しました:', error);
+          alert(`分類色の変更に失敗しました: ${error.message}`);
+        });
+        return
+      }
+
       if (event.target.dataset.role === 'page-input') {
         applyPageInput(event.target.value);
         return
@@ -2989,6 +3573,7 @@
      */
     function open (tabKey = currentTab) {
       currentTab = tabKey;
+      ensureTabState(currentTab);
       ensureStyle();
       ensureOverlay();
       if (!overlay.isConnected) {
@@ -3200,6 +3785,12 @@
       hiddenUserIds: [...config.hiddenUserIds],
       followUserIds: [...config.followUserIds],
       listUserIds: [...config.listUserIds],
+      customUserCategories: config.customUserCategories.map(category => ({
+        id: category.id,
+        label: category.label,
+        color: category.color,
+        userIds: [...category.userIds]
+      })),
       hiddenWords: [...config.hiddenWords],
       hiddenStatuses: config.hiddenStatuses.map(entry => ({
         statusId: entry.statusId,
@@ -3213,12 +3804,25 @@
   }
 
   /**
+   * インポートされた分類色を HEX カラーへ正規化する。
+   * 入力: JSON 内の色文字列。
+   * 出力: #rrggbb 形式の色。不正値は既定色。
+   * 主な処理内容:
+   * 1. 旧 v4 の color なし分類を既定色で補完する
+   * 2. CSS へ反映する値を HEX 形式へ制限する
+   */
+  function normalizeCategoryColor (color) {
+    const normalized = String(color || '').trim().toLowerCase();
+    return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : '#f5c542'
+  }
+
+  /**
    * JSON から読み込んだ設定を検証し、内部で使う形式へ正規化する。
    * 入力: JSON.parse 後の値。
    * 出力: 保存可能な設定オブジェクト。
    * 主な処理内容:
    * 1. バージョンと配列構造を検証する
-   * 2. v1 には無かった settings を既定値で補完する
+   * 2. 古いバージョンに無かった分類や settings を既定値で補完する
    * 3. ユーザー ID や重複値を正規化する
    */
   function normalizeImportedConfig (raw) {
@@ -3226,7 +3830,7 @@
       throw new Error('設定 JSON のルートはオブジェクトである必要があります')
     }
 
-    if (![1, 2, EXPORT_VERSION].includes(raw.version)) {
+    if (![1, 2, 3, EXPORT_VERSION].includes(raw.version)) {
       throw new Error(`未対応の設定バージョンです: ${raw.version}`)
     }
 
@@ -3238,12 +3842,14 @@
     } = raw;
     const followUserIds = raw.version >= 3 ? raw.followUserIds : [];
     const listUserIds = raw.version >= 3 ? raw.listUserIds : [];
+    const customUserCategories = raw.version >= 4 ? raw.customUserCategories : [];
 
     if (
       !Array.isArray(mediaFilterLists) ||
       !Array.isArray(hiddenUserIds) ||
       !Array.isArray(followUserIds) ||
       !Array.isArray(listUserIds) ||
+      !Array.isArray(customUserCategories) ||
       !Array.isArray(hiddenWords) ||
       !Array.isArray(hiddenStatuses)
     ) {
@@ -3264,6 +3870,36 @@
       return {
         statusId: entry.statusId,
         expiresAt: entry.expiresAt
+      }
+    });
+
+
+    const normalizedCustomUserCategories = customUserCategories.map((category, index) => {
+      if (!category || typeof category !== 'object' || Array.isArray(category)) {
+        throw new Error(`customUserCategories[${index}] はオブジェクトである必要があります`)
+      }
+      if (typeof category.id !== 'string' || !category.id) {
+        throw new Error(`customUserCategories[${index}].id が不正です`)
+      }
+      if (typeof category.label !== 'string' || !category.label.trim()) {
+        throw new Error(`customUserCategories[${index}].label が不正です`)
+      }
+      if (!Array.isArray(category.userIds)) {
+        throw new Error(`customUserCategories[${index}].userIds は配列である必要があります`)
+      }
+
+      return {
+        id: category.id,
+        label: category.label.trim(),
+        color: normalizeCategoryColor(category.color),
+        userIds: [
+          ...new Set(
+            category.userIds
+              .filter(item => typeof item === 'string')
+              .map(item => item.replace(/^@/, ''))
+              .filter(Boolean)
+          )
+        ]
       }
     });
 
@@ -3300,6 +3936,10 @@
             .map(item => item.replace(/^@/, ''))
         )
       ],
+      customUserCategories: normalizedCustomUserCategories.filter(
+        (category, index, categories) =>
+          categories.findIndex(item => item.id === category.id) === index
+      ),
       hiddenWords: [...new Set(hiddenWords.filter(item => typeof item === 'string'))],
       hiddenStatuses: normalizedStatuses.filter(
         (entry, index, entries) =>
@@ -3469,6 +4109,11 @@
         removeFollowUser,
         addListUser,
         removeListUser,
+        addCustomUserCategory,
+        removeCustomUserCategory,
+        addCustomCategoryUser,
+        removeCustomCategoryUser,
+        setCustomUserCategoryColor,
         addHiddenWord,
         removeHiddenWord,
         addMediaFilterList,
@@ -3499,6 +4144,8 @@
         addHiddenUser,
         addFollowUser,
         addListUser,
+        addCustomCategoryUser,
+        config,
         reapplyFilters: processor.reapplyFilters
       });
 
@@ -3519,6 +4166,11 @@
         removeFollowUser,
         addListUser,
         removeListUser,
+        addCustomUserCategory,
+        removeCustomUserCategory,
+        addCustomCategoryUser,
+        removeCustomCategoryUser,
+        setCustomUserCategoryColor,
         addHiddenWord,
         removeHiddenWord,
         addHiddenStatus,

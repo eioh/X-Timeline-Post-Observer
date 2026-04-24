@@ -1,5 +1,7 @@
 import { EXPIRE_MS, STORAGE_KEYS } from '../constants.js'
 
+const DEFAULT_CUSTOM_CATEGORY_COLOR = '#f5c542'
+
 // 現在の設定を一か所に集約して持つ。
 // オブジェクト自体を差し替えると参照先が古いまま残るため、各モジュールはこの中身を書き換える前提で共有する。
 export const config = {
@@ -7,6 +9,7 @@ export const config = {
   hiddenUserIds: [],
   followUserIds: [],
   listUserIds: [],
+  customUserCategories: [],
   hiddenWords: [],
   hiddenStatuses: [],
   hideUIEnabled: true,
@@ -26,6 +29,7 @@ function assignConfig (nextConfig) {
   config.hiddenUserIds = nextConfig.hiddenUserIds
   config.followUserIds = nextConfig.followUserIds
   config.listUserIds = nextConfig.listUserIds
+  config.customUserCategories = nextConfig.customUserCategories
   config.hiddenWords = nextConfig.hiddenWords
   config.hiddenStatuses = nextConfig.hiddenStatuses
   config.hideUIEnabled = nextConfig.hideUIEnabled
@@ -47,6 +51,7 @@ export async function loadConfig () {
     [STORAGE_KEYS.hiddenUserIds]: [],
     [STORAGE_KEYS.followUserIds]: [],
     [STORAGE_KEYS.listUserIds]: [],
+    [STORAGE_KEYS.customUserCategories]: [],
     [STORAGE_KEYS.hiddenWords]: [],
     [STORAGE_KEYS.hiddenStatuses]: [],
     [STORAGE_KEYS.hideUIEnabled]: true,
@@ -58,6 +63,7 @@ export async function loadConfig () {
     hiddenUserIds: stored[STORAGE_KEYS.hiddenUserIds],
     followUserIds: stored[STORAGE_KEYS.followUserIds],
     listUserIds: stored[STORAGE_KEYS.listUserIds],
+    customUserCategories: stored[STORAGE_KEYS.customUserCategories],
     hiddenWords: stored[STORAGE_KEYS.hiddenWords],
     hiddenStatuses: stored[STORAGE_KEYS.hiddenStatuses],
     hideUIEnabled: stored[STORAGE_KEYS.hideUIEnabled],
@@ -108,6 +114,7 @@ export async function replaceConfig (nextConfig) {
     hiddenUserIds: nextConfig.hiddenUserIds,
     followUserIds: nextConfig.followUserIds,
     listUserIds: nextConfig.listUserIds,
+    customUserCategories: nextConfig.customUserCategories,
     hiddenWords: nextConfig.hiddenWords,
     hiddenStatuses: nextConfig.hiddenStatuses,
     hideUIEnabled: nextConfig.hideUIEnabled,
@@ -119,6 +126,7 @@ export async function replaceConfig (nextConfig) {
     [STORAGE_KEYS.hiddenUserIds]: config.hiddenUserIds,
     [STORAGE_KEYS.followUserIds]: config.followUserIds,
     [STORAGE_KEYS.listUserIds]: config.listUserIds,
+    [STORAGE_KEYS.customUserCategories]: config.customUserCategories,
     [STORAGE_KEYS.hiddenWords]: config.hiddenWords,
     [STORAGE_KEYS.hiddenStatuses]: config.hiddenStatuses,
     [STORAGE_KEYS.hideUIEnabled]: config.hideUIEnabled,
@@ -152,6 +160,53 @@ export async function removeMediaFilterList (listName) {
  */
 function normalizeUserId (userId) {
   return userId.trim().replace(/^@/, '')
+}
+
+
+/**
+ * 分類色を保存用の HEX カラーへ正規化する。
+ * 入力: ユーザーが選んだ色文字列。
+ * 出力: #rrggbb 形式の色。未指定や不正値は既定色。
+ * 主な処理内容:
+ * 1. color input とインポート値を同じ形式へ揃える
+ * 2. CSS へ直接渡す値なので HEX 形式以外は既定色へ戻す
+ */
+function normalizeCategoryColor (color) {
+  const normalized = String(color || '').trim().toLowerCase()
+  return /^#[0-9a-f]{6}$/.test(normalized)
+    ? normalized
+    : DEFAULT_CUSTOM_CATEGORY_COLOR
+}
+
+
+/**
+ * ユーザー定義分類 ID を生成する。
+ * 入力: 分類名。
+ * 出力: 保存に使う分類 ID。
+ * 主な処理内容:
+ * 1. 分類名を小文字化して URL セーフ寄りの文字へ置き換える
+ * 2. 同名分類が重なった場合も衝突しないよう時刻を付ける
+ */
+function createCustomUserCategoryId (label) {
+  const base = label
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+
+  return `custom-${base || 'category'}-${Date.now().toString(36)}`
+}
+
+/**
+ * ユーザー定義分類を ID で探す。
+ * 入力: 分類 ID。
+ * 出力: 分類オブジェクト。見つからない場合は null。
+ * 主な処理内容:
+ * 1. customUserCategories から ID が一致する分類を返す
+ */
+function findCustomUserCategory (categoryId) {
+  return config.customUserCategories.find(category => category.id === categoryId) ?? null
 }
 
 /**
@@ -247,6 +302,114 @@ export async function removeListUser (userId) {
   config.listUserIds = config.listUserIds.filter(user => user !== id)
   await saveKey('listUserIds')
   console.log(`[X-Observer] リストインユーザー削除: @${id}`)
+}
+
+
+/**
+ * ユーザー定義分類を追加する。
+ * 入力: 追加したい分類名と任意の分類色。
+ * 出力: 作成した分類オブジェクト。空名または重複名なら null。
+ * 主な処理内容:
+ * 1. 分類名を trim して空入力を除外する
+ * 2. 既存分類名と重複しない場合だけ ID、色、空のユーザー配列を保存する
+ */
+export async function addCustomUserCategory (label, color = DEFAULT_CUSTOM_CATEGORY_COLOR) {
+  const normalizedLabel = label.trim()
+  if (
+    !normalizedLabel ||
+    config.customUserCategories.some(category => category.label === normalizedLabel)
+  ) {
+    return null
+  }
+
+  const category = {
+    id: createCustomUserCategoryId(normalizedLabel),
+    label: normalizedLabel,
+    color: normalizeCategoryColor(color),
+    userIds: []
+  }
+
+  config.customUserCategories.push(category)
+  await saveKey('customUserCategories')
+  console.log(`[X-Observer] ユーザー定義分類追加: ${normalizedLabel}`)
+  return category
+}
+
+/**
+ * ユーザー定義分類を削除する。
+ * 入力: 削除したい分類 ID。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. ID が一致しない分類だけを残す
+ * 2. 分類に紐づくユーザー ID も分類ごと削除して保存する
+ */
+export async function removeCustomUserCategory (categoryId) {
+  const category = findCustomUserCategory(categoryId)
+  config.customUserCategories = config.customUserCategories.filter(
+    item => item.id !== categoryId
+  )
+  await saveKey('customUserCategories')
+  console.log(`[X-Observer] ユーザー定義分類削除: ${category?.label ?? categoryId}`)
+}
+
+
+/**
+ * ユーザー定義分類の色を変更する。
+ * 入力: 分類 ID、#rrggbb 形式の色。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 分類 ID から更新対象を探す
+ * 2. 色を安全な HEX 形式へ正規化して保存する
+ */
+export async function setCustomUserCategoryColor (categoryId, color) {
+  const category = findCustomUserCategory(categoryId)
+  if (!category) {
+    return
+  }
+
+  category.color = normalizeCategoryColor(color)
+  await saveKey('customUserCategories')
+  console.log(`[X-Observer] ${category.label}分類色変更: ${category.color}`)
+}
+
+/**
+ * ユーザー定義分類へユーザー ID を追加する。
+ * 入力: 分類 ID、@ の有無どちらでもよいユーザー ID。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 分類 ID から保存先を探す
+ * 2. ユーザー ID を正規化し、未登録時だけ追加して保存する
+ */
+export async function addCustomCategoryUser (categoryId, userId) {
+  const category = findCustomUserCategory(categoryId)
+  const id = normalizeUserId(userId)
+  if (!category || !id || category.userIds.includes(id)) {
+    return
+  }
+
+  category.userIds.push(id)
+  await saveKey('customUserCategories')
+  console.log(`[X-Observer] ${category.label}ユーザー追加: @${id}`)
+}
+
+/**
+ * ユーザー定義分類からユーザー ID を削除する。
+ * 入力: 分類 ID、@ の有無どちらでもよいユーザー ID。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 分類 ID から保存先を探す
+ * 2. 正規化したユーザー ID と一致しない項目だけを残す
+ */
+export async function removeCustomCategoryUser (categoryId, userId) {
+  const category = findCustomUserCategory(categoryId)
+  const id = normalizeUserId(userId)
+  if (!category || !id) {
+    return
+  }
+
+  category.userIds = category.userIds.filter(user => user !== id)
+  await saveKey('customUserCategories')
+  console.log(`[X-Observer] ${category.label}ユーザー削除: @${id}`)
 }
 
 /**

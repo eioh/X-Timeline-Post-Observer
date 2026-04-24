@@ -1,5 +1,22 @@
 import { extractPostInfo } from '../extractors/postExtractor.js'
 
+
+/**
+ * HTML へ埋め込む文字列をエスケープする。
+ * 入力: 表示したい文字列。
+ * 出力: HTML として解釈されない安全な文字列。
+ * 主な処理内容:
+ * 1. ユーザー定義分類名が DOM 構造を壊さないよう特殊文字を置き換える
+ */
+function escapeHtml (value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
 /**
  * X 標準ドロップダウンを React の onDismiss 経由で閉じる。
  * 入力: role="menu" の要素
@@ -45,7 +62,7 @@ function createDropdownMenuItem ({ className, label, onSelect }) {
         </g>
       </svg>
     </div>
-    <div class="xtlo-label">${label}</div>
+    <div class="xtlo-label">${escapeHtml(label)}</div>
   `
 
   menuItem.addEventListener('click', async event => {
@@ -59,18 +76,21 @@ function createDropdownMenuItem ({ className, label, onSelect }) {
 
 /**
  * 投稿の「...」メニューへ独自の非表示項目を注入する監視を開始する。
- * 入力: 投稿・ユーザーの非表示登録関数と再適用関数
+ * 入力: 投稿・ユーザーの非表示登録関数、分類登録関数、現在設定、再適用関数
  * 出力: MutationObserver
  * 主な処理内容:
  * 1. 直前に押された caret を記録する
  * 2. menu 出現を監視する
  * 3. 対象投稿の statusId / userId を使って独自 menuitem を注入する
+ * 4. ユーザー定義分類があれば分類追加項目も注入する
  */
 export function setupDropdownHideMenu ({
   addHiddenStatus,
   addHiddenUser,
   addFollowUser,
   addListUser,
+  addCustomCategoryUser,
+  config,
   reapplyFilters
 }) {
   // X 標準メニューは「どの投稿から開いたか」を直接渡してこないため、直前クリックを手掛かりにする。
@@ -88,10 +108,13 @@ export function setupDropdownHideMenu ({
   )
 
   /**
-   * 対象 menu へ「このポストを非表示」「このユーザーを非表示」項目を差し込む。
+   * 対象 menu へ追加分類や非表示の独自項目を差し込む。
    * 入力: role="menu" の要素
    * 出力: なし
-   * 主な処理内容: 直前 caret に対応する article を見つけ、投稿 ID とユーザー ID ごとの項目を追加する
+   * 主な処理内容:
+   * 1. 直前 caret に対応する article を見つける
+   * 2. ユーザー ID があればフォロー、リスト、ユーザー定義分類、ユーザー非表示を追加する
+   * 3. 投稿 ID があればポスト非表示を追加する
    */
   function injectHideMenuItem (menu) {
     if (
@@ -150,6 +173,29 @@ export function setupDropdownHideMenu ({
           }
         })
       )
+
+      for (const category of config.customUserCategories) {
+        menu.appendChild(
+          createDropdownMenuItem({
+            className: 'xtlo-hide-post-menuitem',
+            label: `分類「${category.label}」に追加 (@${info.userId})`,
+            onSelect: async menuItem => {
+              const dropdownMenu = menuItem.closest('[role="menu"]')
+
+              await addCustomCategoryUser(category.id, info.userId)
+              reapplyFilters()
+
+              if (dropdownMenu) {
+                closeDropdownMenu(dropdownMenu)
+              }
+
+              console.log(
+                `[X-Observer] メニューから${category.label}分類へユーザーを追加しました: @${info.userId}`
+              )
+            }
+          })
+        )
+      }
 
       menu.appendChild(
         createDropdownMenuItem({

@@ -1,6 +1,8 @@
 import { config } from '../state/configStore.js'
 
 const PAGE_SIZE = 500
+const CUSTOM_TAB_PREFIX = 'custom:'
+const DEFAULT_CUSTOM_CATEGORY_COLOR = '#f5c542'
 const TAB_DEFINITIONS = [
   { key: 'users',    label: 'ユーザー',   placeholder: '[@]user_id',    category: 'hide' },
   { key: 'statuses', label: 'ポスト',     placeholder: 'post_id / URL', category: 'hide' },
@@ -8,13 +10,75 @@ const TAB_DEFINITIONS = [
   { key: 'media',    label: 'メディア',   placeholder: 'リスト名',      category: 'hide' },
   { key: 'follow',   label: 'フォロー',   placeholder: '[@]user_id',    category: 'color' },
   { key: 'list',     label: 'リスト',     placeholder: '[@]user_id',    category: 'color' },
-  { key: 'settings', label: '設定',       placeholder: '',              category: 'settings' }
+  { key: 'settings', label: '基本',       placeholder: '',              category: 'settings' },
+  { key: 'categorySettings', label: '分類', placeholder: '',             category: 'settings' }
 ]
 const CATEGORY_DEFINITIONS = [
   { key: 'hide',     label: '非表示' },
   { key: 'color',    label: '分類' },
   { key: 'settings', label: '設定' }
 ]
+
+
+/**
+ * ユーザー定義分類のタブキーを作る。
+ * 入力: 分類 ID。
+ * 出力: 設定ダイアログ内で使うタブキー。
+ * 主な処理内容:
+ * 1. 既存タブと衝突しないよう専用プレフィックスを付ける
+ */
+function getCustomCategoryTabKey (categoryId) {
+  return `${CUSTOM_TAB_PREFIX}${categoryId}`
+}
+
+/**
+ * タブキーからユーザー定義分類 ID を取り出す。
+ * 入力: タブキー。
+ * 出力: 分類 ID。ユーザー定義分類でなければ null。
+ * 主な処理内容:
+ * 1. 専用プレフィックスを持つタブだけ分類 ID として扱う
+ */
+function getCustomCategoryIdFromTabKey (tabKey) {
+  return tabKey.startsWith(CUSTOM_TAB_PREFIX)
+    ? tabKey.slice(CUSTOM_TAB_PREFIX.length)
+    : null
+}
+
+/**
+ * タブキーに対応するユーザー定義分類を返す。
+ * 入力: タブキー。
+ * 出力: 分類オブジェクト。該当しなければ null。
+ * 主な処理内容:
+ * 1. タブキーから分類 ID を取り出す
+ * 2. 現在の config から一致する分類を探す
+ */
+function getCustomCategoryForTab (tabKey) {
+  const categoryId = getCustomCategoryIdFromTabKey(tabKey)
+  if (!categoryId) return null
+
+  return config.customUserCategories.find(category => category.id === categoryId) ?? null
+}
+
+/**
+ * 固定タブとユーザー定義分類タブを合わせて返す。
+ * 入力: なし。
+ * 出力: タブ定義配列。
+ * 主な処理内容:
+ * 1. 固定タブを先に並べる
+ * 2. ユーザー定義分類を分類カテゴリの小項目として追加する
+ */
+function getAllTabDefinitions () {
+  return [
+    ...TAB_DEFINITIONS,
+    ...config.customUserCategories.map(category => ({
+      key: getCustomCategoryTabKey(category.id),
+      label: category.label,
+      placeholder: '[@]user_id',
+      category: 'color',
+      customCategoryId: category.id
+    }))
+  ]
+}
 
 const DIALOG_STYLE = `
   .xtlo-settings-overlay {
@@ -179,6 +243,79 @@ const DIALOG_STYLE = `
   .xtlo-settings-side-icon svg {
     width: 100%;
     height: 100%;
+  }
+
+
+  .xtlo-settings-side-tab-label {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .xtlo-settings-category-manager {
+    display: grid;
+    gap: 14px;
+  }
+
+  .xtlo-settings-category-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 44px auto;
+    gap: 10px;
+    padding: 8px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.08);
+  }
+
+  .xtlo-settings-color-input {
+    width: 44px;
+    height: 36px;
+    padding: 4px;
+    border: 0;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.12);
+    cursor: pointer;
+  }
+
+  .xtlo-settings-category-list {
+    display: grid;
+    gap: 8px;
+  }
+
+  .xtlo-settings-category-row {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr) 44px 34px;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.07);
+  }
+
+  .xtlo-settings-category-swatch {
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.16);
+  }
+
+  .xtlo-settings-category-meta {
+    min-width: 0;
+  }
+
+  .xtlo-settings-category-name {
+    overflow: hidden;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .xtlo-settings-category-count {
+    color: rgba(255, 255, 255, 0.52);
+    font-size: 12px;
   }
 
   .xtlo-settings-content {
@@ -586,6 +723,16 @@ function getItemsForTab (tabKey) {
     }))
   }
 
+
+  const customCategory = getCustomCategoryForTab(tabKey)
+  if (customCategory) {
+    return customCategory.userIds.map(value => ({
+      value,
+      title: `@${value}`,
+      subtitle: `${customCategory.label}ユーザー`
+    }))
+  }
+
   if (tabKey === 'statuses') {
     return config.hiddenStatuses.map(entry => ({
       value: entry.statusId,
@@ -614,10 +761,14 @@ function getItemsForTab (tabKey) {
  * 入力: 小項目のタブキー。
  * 出力: 大分類キー。見つからない場合は非表示分類。
  * 主な処理内容:
- * 1. TAB_DEFINITIONS から現在タブの定義を探す
- * 2. 見つからない場合も UI が壊れないよう既定分類へ戻す
+ * 1. ユーザー定義分類タブは分類カテゴリへ固定する
+ * 2. 固定タブは TAB_DEFINITIONS から現在タブの定義を探す
  */
 function getCategoryKeyForTab (tabKey) {
+  if (getCustomCategoryIdFromTabKey(tabKey)) {
+    return 'color'
+  }
+
   return TAB_DEFINITIONS.find(tab => tab.key === tabKey)?.category ?? 'hide'
 }
 
@@ -626,10 +777,10 @@ function getCategoryKeyForTab (tabKey) {
  * 入力: 大分類キー。
  * 出力: 該当する小項目定義配列。
  * 主な処理内容:
- * 1. category が一致する TAB_DEFINITIONS のみを抽出する
+ * 1. 固定タブとユーザー定義分類タブから category が一致するものだけを抽出する
  */
 function getTabsForCategory (categoryKey) {
-  return TAB_DEFINITIONS.filter(tab => tab.category === categoryKey)
+  return getAllTabDefinitions().filter(tab => tab.category === categoryKey)
 }
 
 /**
@@ -682,6 +833,11 @@ export function createSettingsDialog ({
   removeFollowUser,
   addListUser,
   removeListUser,
+  addCustomUserCategory,
+  removeCustomUserCategory,
+  addCustomCategoryUser,
+  removeCustomCategoryUser,
+  setCustomUserCategoryColor,
   addHiddenWord,
   removeHiddenWord,
   addMediaFilterList,
@@ -713,6 +869,23 @@ export function createSettingsDialog ({
     statuses: '',
     words: '',
     media: ''
+  }
+
+
+  /**
+   * 動的タブ用のページ番号と検索語を初期化する。
+   * 入力: タブキー。
+   * 出力: なし。
+   * 主な処理内容:
+   * 1. ユーザー定義分類タブが後から増えても状態オブジェクトへ初期値を入れる
+   */
+  function ensureTabState (tabKey) {
+    if (!pageByTab[tabKey]) {
+      pageByTab[tabKey] = 1
+    }
+    if (tabKey !== 'settings' && searchByTab[tabKey] === undefined) {
+      searchByTab[tabKey] = ''
+    }
   }
 
   /**
@@ -791,6 +964,26 @@ export function createSettingsDialog ({
       }
     }
 
+
+    const customCategory = getCustomCategoryForTab(tabKey)
+    if (customCategory) {
+      return {
+        items: getItemsForTab(tabKey),
+        addLabel: 'Add',
+        clearLabel: `Clear all ${customCategory.label}`,
+        totalLabel: 'Known Users',
+        addItem: async value => addCustomCategoryUser(customCategory.id, value),
+        removeItem: async value => removeCustomCategoryUser(customCategory.id, value),
+        clearAll: async () => {
+          for (const value of [...customCategory.userIds]) {
+            await removeCustomCategoryUser(customCategory.id, value)
+          }
+          reapplyFilters()
+        },
+        normalizeInput: value => value.replace(/^@/, '')
+      }
+    }
+
     if (tabKey === 'statuses') {
       return {
         items: getItemsForTab(tabKey),
@@ -852,6 +1045,10 @@ export function createSettingsDialog ({
    * 1. 設定タブだけは件数ではなく状態数として表現する
    */
   function getFooterBadgeLabel (tabKey, count) {
+    if (tabKey === 'categorySettings') {
+      return `${count} Categories`
+    }
+
     if (tabKey === 'settings') {
       return `${count} Settings`
     }
@@ -886,9 +1083,9 @@ export function createSettingsDialog ({
   function renderSideTabs (categoryKey) {
     return getTabsForCategory(categoryKey)
       .map(tab => `
-        <button class="xtlo-settings-side-tab" data-tab="${tab.key}" data-active="${String(tab.key === currentTab)}">
+        <button class="xtlo-settings-side-tab" data-tab="${escapeAttribute(tab.key)}" data-active="${String(tab.key === currentTab)}">
           <span class="xtlo-settings-side-icon">${getListIcon(tab.key)}</span>
-          <span>${tab.label}</span>
+          <span class="xtlo-settings-side-tab-label">${escapeHtml(tab.label)}</span>
         </button>
       `)
       .join('')
@@ -974,6 +1171,14 @@ export function createSettingsDialog ({
       `
     }
 
+    if (getCustomCategoryIdFromTabKey(tabKey) || tabKey === 'categorySettings') {
+      return `
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M12 3 3 8l9 5 9-5zm-6 8.2V16l6 3 6-3v-4.8l-6 3.3z"/>
+        </svg>
+      `
+    }
+
     if (tabKey === 'settings') {
       return `
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -989,6 +1194,44 @@ export function createSettingsDialog ({
     `
   }
 
+
+  /**
+   * 分類管理タブの HTML を返す。
+   * 入力: なし。
+   * 出力: 分類追加フォームと既存分類一覧の HTML 文字列。
+   * 主な処理内容:
+   * 1. 分類名と色を指定して追加できるフォームを作る
+   * 2. 既存分類ごとに色変更と削除ボタンを配置する
+   */
+  function renderCategorySettings () {
+    const rows = config.customUserCategories.length
+      ? config.customUserCategories.map(category => `
+        <div class="xtlo-settings-category-row">
+          <span class="xtlo-settings-category-swatch" style="background: ${escapeAttribute(category.color || DEFAULT_CUSTOM_CATEGORY_COLOR)}"></span>
+          <div class="xtlo-settings-category-meta">
+            <div class="xtlo-settings-category-name">${escapeHtml(category.label)}</div>
+            <div class="xtlo-settings-category-count">${category.userIds.length} users</div>
+          </div>
+          <input class="xtlo-settings-color-input" type="color" data-action="set-category-color" data-category-id="${escapeAttribute(category.id)}" value="${escapeAttribute(category.color || DEFAULT_CUSTOM_CATEGORY_COLOR)}" aria-label="分類色" />
+          <button class="xtlo-settings-danger-icon" data-action="remove-category" data-category-id="${escapeAttribute(category.id)}" aria-label="分類を削除">
+            ${getTrashIcon()}
+          </button>
+        </div>
+      `).join('')
+      : '<div class="xtlo-settings-empty">まだ分類はありません。</div>'
+
+    return `
+      <div class="xtlo-settings-category-manager">
+        <div class="xtlo-settings-category-form">
+          <input class="xtlo-settings-input" type="text" data-role="category-input" placeholder="分類名" aria-label="分類名" />
+          <input class="xtlo-settings-color-input" type="color" data-role="category-color-input" value="${DEFAULT_CUSTOM_CATEGORY_COLOR}" aria-label="分類色" />
+          <button class="xtlo-settings-primary" data-action="add-category">Add</button>
+        </div>
+        <div class="xtlo-settings-category-list">${rows}</div>
+      </div>
+    `
+  }
+
   /**
    * 画面を再描画する。
    * 入力: なし。
@@ -1000,6 +1243,8 @@ export function createSettingsDialog ({
    */
   function render () {
     if (!overlay) return
+
+    ensureTabState(currentTab)
 
     const body = overlay.querySelector('.xtlo-settings-body')
     const footer = overlay.querySelector('.xtlo-settings-footer')
@@ -1059,7 +1304,16 @@ export function createSettingsDialog ({
       return
     }
 
-    const tabDefinition = TAB_DEFINITIONS.find(tab => tab.key === currentTab)
+    if (currentTab === 'categorySettings') {
+      content.innerHTML = renderCategorySettings()
+      footer.innerHTML = `
+        <div></div>
+        <div class="xtlo-settings-badge">${getFooterBadgeLabel('categorySettings', config.customUserCategories.length)}</div>
+      `
+      return
+    }
+
+    const tabDefinition = getAllTabDefinitions().find(tab => tab.key === currentTab)
     const actions = getTabActions(currentTab)
     const totalItems = actions.items.length
     const searchQuery = searchByTab[currentTab] ?? ''
@@ -1167,6 +1421,76 @@ export function createSettingsDialog ({
    * 1. 確認ダイアログで誤操作を防ぐ
    * 2. タブごとの clearAll を実行して再描画する
    */
+
+  /**
+   * ユーザー定義分類を追加する。
+   * 入力: 分類設定タブの分類名と色入力欄。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. 分類名と色を読み取って保存コールバックへ渡す
+   * 2. 作成後は分類設定タブを再描画する
+   */
+  async function handleAddCategory () {
+    const input = overlay.querySelector('[data-role="category-input"]')
+    if (!input) return
+
+    const colorInput = overlay.querySelector('[data-role="category-color-input"]')
+    const label = input.value.trim()
+    const color = colorInput?.value || DEFAULT_CUSTOM_CATEGORY_COLOR
+    if (!label) return
+
+    const category = await addCustomUserCategory(label, color)
+    if (!category) {
+      alert('分類名が空、または既に登録済みです')
+      return
+    }
+
+    input.value = ''
+    if (colorInput) {
+      colorInput.value = DEFAULT_CUSTOM_CATEGORY_COLOR
+    }
+    render()
+  }
+
+  /**
+   * ユーザー定義分類を削除する。
+   * 入力: 分類 ID。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. 確認ダイアログで誤削除を防ぐ
+   * 2. 削除中の分類タブを開いていた場合は分類設定タブへ戻す
+   */
+  async function handleRemoveCategory (categoryId) {
+    const category = config.customUserCategories.find(item => item.id === categoryId)
+    if (!category) return
+
+    if (!confirm(`分類「${category.label}」を削除しますか？登録ユーザーもこの分類から削除されます。`)) {
+      return
+    }
+
+    await removeCustomUserCategory(categoryId)
+    reapplyFilters()
+    if (currentTab === getCustomCategoryTabKey(categoryId)) {
+      currentTab = 'categorySettings'
+    }
+    render()
+  }
+
+
+  /**
+   * ユーザー定義分類の色変更を保存する。
+   * 入力: 分類 ID と color input の値。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. 選択された色を保存コールバックへ渡す
+   * 2. 既存タイムラインの分類色を再適用する
+   */
+  async function handleSetCategoryColor (categoryId, color) {
+    await setCustomUserCategoryColor(categoryId, color)
+    reapplyFilters()
+    render()
+  }
+
   async function handleClearAll () {
     const actions = getTabActions(currentTab)
     if (actions.items.length === 0) return
@@ -1269,6 +1593,16 @@ export function createSettingsDialog ({
       return
     }
 
+    if (action === 'add-category') {
+      await handleAddCategory()
+      return
+    }
+
+    if (action === 'remove-category') {
+      await handleRemoveCategory(target.dataset.categoryId)
+      return
+    }
+
     if (action === 'clear-all') {
       await handleClearAll()
       return
@@ -1328,6 +1662,15 @@ export function createSettingsDialog ({
 
     if (
       event.key === 'Enter' &&
+      event.target.dataset.role === 'category-input'
+    ) {
+      event.preventDefault()
+      await handleAddCategory()
+      return
+    }
+
+    if (
+      event.key === 'Enter' &&
       event.target.classList.contains('xtlo-settings-input')
     ) {
       event.preventDefault()
@@ -1345,14 +1688,22 @@ export function createSettingsDialog ({
   }
 
   /**
-   * change イベントからページ入力欄の変更を反映する。
+   * change イベントからページ入力欄や分類色の変更を反映する。
    * 入力: change イベント。
    * 出力: なし。
    * 主な処理内容:
-   * 1. ページ入力欄の変更だけを拾う
-   * 2. 不正値を補正して再描画する
+   * 1. 分類色の変更は保存してタイムラインへ再適用する
+   * 2. ページ入力欄は不正値を補正して再描画する
    */
   function handleOverlayChange (event) {
+    if (event.target.dataset.action === 'set-category-color') {
+      handleSetCategoryColor(event.target.dataset.categoryId, event.target.value).catch(error => {
+        console.error('[X-Observer] 分類色の変更に失敗しました:', error)
+        alert(`分類色の変更に失敗しました: ${error.message}`)
+      })
+      return
+    }
+
     if (event.target.dataset.role === 'page-input') {
       applyPageInput(event.target.value)
       return
@@ -1451,6 +1802,7 @@ export function createSettingsDialog ({
    */
   function open (tabKey = currentTab) {
     currentTab = tabKey
+    ensureTabState(currentTab)
     ensureStyle()
     ensureOverlay()
     if (!overlay.isConnected) {

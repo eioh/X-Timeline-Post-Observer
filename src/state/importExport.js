@@ -16,6 +16,12 @@ export function createExportData () {
     hiddenUserIds: [...config.hiddenUserIds],
     followUserIds: [...config.followUserIds],
     listUserIds: [...config.listUserIds],
+    customUserCategories: config.customUserCategories.map(category => ({
+      id: category.id,
+      label: category.label,
+      color: category.color,
+      userIds: [...category.userIds]
+    })),
     hiddenWords: [...config.hiddenWords],
     hiddenStatuses: config.hiddenStatuses.map(entry => ({
       statusId: entry.statusId,
@@ -29,12 +35,25 @@ export function createExportData () {
 }
 
 /**
+ * インポートされた分類色を HEX カラーへ正規化する。
+ * 入力: JSON 内の色文字列。
+ * 出力: #rrggbb 形式の色。不正値は既定色。
+ * 主な処理内容:
+ * 1. 旧 v4 の color なし分類を既定色で補完する
+ * 2. CSS へ反映する値を HEX 形式へ制限する
+ */
+function normalizeCategoryColor (color) {
+  const normalized = String(color || '').trim().toLowerCase()
+  return /^#[0-9a-f]{6}$/.test(normalized) ? normalized : '#f5c542'
+}
+
+/**
  * JSON から読み込んだ設定を検証し、内部で使う形式へ正規化する。
  * 入力: JSON.parse 後の値。
  * 出力: 保存可能な設定オブジェクト。
  * 主な処理内容:
  * 1. バージョンと配列構造を検証する
- * 2. v1 には無かった settings を既定値で補完する
+ * 2. 古いバージョンに無かった分類や settings を既定値で補完する
  * 3. ユーザー ID や重複値を正規化する
  */
 export function normalizeImportedConfig (raw) {
@@ -42,7 +61,7 @@ export function normalizeImportedConfig (raw) {
     throw new Error('設定 JSON のルートはオブジェクトである必要があります')
   }
 
-  if (![1, 2, EXPORT_VERSION].includes(raw.version)) {
+  if (![1, 2, 3, EXPORT_VERSION].includes(raw.version)) {
     throw new Error(`未対応の設定バージョンです: ${raw.version}`)
   }
 
@@ -54,12 +73,14 @@ export function normalizeImportedConfig (raw) {
   } = raw
   const followUserIds = raw.version >= 3 ? raw.followUserIds : []
   const listUserIds = raw.version >= 3 ? raw.listUserIds : []
+  const customUserCategories = raw.version >= 4 ? raw.customUserCategories : []
 
   if (
     !Array.isArray(mediaFilterLists) ||
     !Array.isArray(hiddenUserIds) ||
     !Array.isArray(followUserIds) ||
     !Array.isArray(listUserIds) ||
+    !Array.isArray(customUserCategories) ||
     !Array.isArray(hiddenWords) ||
     !Array.isArray(hiddenStatuses)
   ) {
@@ -80,6 +101,36 @@ export function normalizeImportedConfig (raw) {
     return {
       statusId: entry.statusId,
       expiresAt: entry.expiresAt
+    }
+  })
+
+
+  const normalizedCustomUserCategories = customUserCategories.map((category, index) => {
+    if (!category || typeof category !== 'object' || Array.isArray(category)) {
+      throw new Error(`customUserCategories[${index}] はオブジェクトである必要があります`)
+    }
+    if (typeof category.id !== 'string' || !category.id) {
+      throw new Error(`customUserCategories[${index}].id が不正です`)
+    }
+    if (typeof category.label !== 'string' || !category.label.trim()) {
+      throw new Error(`customUserCategories[${index}].label が不正です`)
+    }
+    if (!Array.isArray(category.userIds)) {
+      throw new Error(`customUserCategories[${index}].userIds は配列である必要があります`)
+    }
+
+    return {
+      id: category.id,
+      label: category.label.trim(),
+      color: normalizeCategoryColor(category.color),
+      userIds: [
+        ...new Set(
+          category.userIds
+            .filter(item => typeof item === 'string')
+            .map(item => item.replace(/^@/, ''))
+            .filter(Boolean)
+        )
+      ]
     }
   })
 
@@ -116,6 +167,10 @@ export function normalizeImportedConfig (raw) {
           .map(item => item.replace(/^@/, ''))
       )
     ],
+    customUserCategories: normalizedCustomUserCategories.filter(
+      (category, index, categories) =>
+        categories.findIndex(item => item.id === category.id) === index
+    ),
     hiddenWords: [...new Set(hiddenWords.filter(item => typeof item === 'string'))],
     hiddenStatuses: normalizedStatuses.filter(
       (entry, index, entries) =>

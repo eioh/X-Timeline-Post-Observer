@@ -154,6 +154,7 @@
         <button class="preview-button" data-open-tab="follow">フォロー</button>
         <button class="preview-button" data-open-tab="list">リスト</button>
         <button class="preview-button" data-open-tab="settings">設定</button>
+        <button class="preview-button" data-open-tab="categorySettings">分類設定</button>
       </div>
     </aside>
     <main class="preview-main">
@@ -205,6 +206,10 @@
       config.hiddenUserIds = ['spam_user', 'mute_target', 'very_long_user_name_for_layout_check']
       config.followUserIds = ['team_member', 'product_news']
       config.listUserIds = ['industry_watch', 'event_reporter']
+      config.customUserCategories = [
+        { id: 'custom-design', label: 'デザイン', color: '#b17cff', userIds: ['ux_researcher', 'visual_notes'] },
+        { id: 'custom-alert', label: '要確認', color: '#ff7a59', userIds: ['incident_watch'] }
+      ]
       config.hiddenWords = ['spoiler', 'プロモーション', 'very-long-keyword-for-wrapping-check']
       config.mediaFilterLists = ['ニュース', '画像なし監視']
       config.hiddenStatuses = [
@@ -241,6 +246,107 @@
     async function removeUserLikeValue (key, value) {
       const normalized = value.trim().replace(/^@/, '')
       config[key] = config[key].filter(item => item !== normalized)
+    }
+
+
+    /**
+     * プレビュー用のユーザー定義分類 ID を生成する。
+     * 入力: 分類名。
+     * 出力: 分類 ID。
+     * 主な処理内容:
+     * 1. 表示名から扱いやすい英数字 ID を作る
+     * 2. 同名追加時の衝突を避けるため時刻を付ける
+     */
+    function createPreviewCategoryId (label) {
+      const base = label
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'category'
+
+      return `custom-${base}-${Date.now().toString(36)}`
+    }
+
+    /**
+     * プレビュー用のユーザー定義分類を追加する。
+     * 入力: 分類名。
+     * 出力: 作成した分類。追加しない場合は null。
+     * 主な処理内容:
+     * 1. 空名と重複名を除外する
+     * 2. 本番と同じ id / label / userIds 形式で config に追加する
+     */
+    async function addCustomUserCategory (label, color = '#f5c542') {
+      const normalized = label.trim()
+      if (!normalized || config.customUserCategories.some(category => category.label === normalized)) {
+        return null
+      }
+
+      const category = {
+        id: createPreviewCategoryId(normalized),
+        label: normalized,
+        color,
+        userIds: []
+      }
+      config.customUserCategories.push(category)
+      return category
+    }
+
+    /**
+     * プレビュー用のユーザー定義分類を削除する。
+     * 入力: 分類 ID。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. ID が一致しない分類だけを残す
+     */
+    async function removeCustomUserCategory (categoryId) {
+      config.customUserCategories = config.customUserCategories.filter(category => category.id !== categoryId)
+    }
+
+
+    /**
+     * プレビュー用のユーザー定義分類色を更新する。
+     * 入力: 分類 ID、#rrggbb 形式の色。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. 分類を探して color を更新する
+     */
+    async function setCustomUserCategoryColor (categoryId, color) {
+      const category = config.customUserCategories.find(item => item.id === categoryId)
+      if (category) {
+        category.color = color
+      }
+    }
+
+    /**
+     * プレビュー用のユーザー定義分類へユーザー ID を追加する。
+     * 入力: 分類 ID、ユーザー ID。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. 分類を探してユーザー ID を正規化する
+     * 2. 未登録の場合だけ userIds へ追加する
+     */
+    async function addCustomCategoryUser (categoryId, userId) {
+      const category = config.customUserCategories.find(item => item.id === categoryId)
+      const normalized = userId.trim().replace(/^@/, '')
+      if (category && normalized && !category.userIds.includes(normalized)) {
+        category.userIds.push(normalized)
+      }
+    }
+
+    /**
+     * プレビュー用のユーザー定義分類からユーザー ID を削除する。
+     * 入力: 分類 ID、ユーザー ID。
+     * 出力: Promise<void>
+     * 主な処理内容:
+     * 1. 分類を探してユーザー ID を正規化する
+     * 2. 一致しないユーザー ID だけを残す
+     */
+    async function removeCustomCategoryUser (categoryId, userId) {
+      const category = config.customUserCategories.find(item => item.id === categoryId)
+      const normalized = userId.trim().replace(/^@/, '')
+      if (category) {
+        category.userIds = category.userIds.filter(item => item !== normalized)
+      }
     }
 
     /**
@@ -317,6 +423,11 @@
         removeFollowUser: value => removeUserLikeValue('followUserIds', value),
         addListUser: value => addUserLikeValue('listUserIds', value),
         removeListUser: value => removeUserLikeValue('listUserIds', value),
+        addCustomUserCategory,
+        removeCustomUserCategory,
+        addCustomCategoryUser,
+        removeCustomCategoryUser,
+        setCustomUserCategoryColor,
         addHiddenWord: value => addStringValue('hiddenWords', value),
         removeHiddenWord: value => removeStringValue('hiddenWords', value),
         addMediaFilterList: value => addStringValue('mediaFilterLists', value),
