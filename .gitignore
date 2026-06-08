@@ -141,3 +141,6 @@ vite.config.ts.timestamp-*
 
 tasks/
 %SystemDrive%/
+
+# Project temporary files
+temp/

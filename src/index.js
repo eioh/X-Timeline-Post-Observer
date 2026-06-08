@@ -19,6 +19,10 @@ import {
   addHiddenWord,
   addListUser,
   addMediaFilterList,
+  clearCustomCategoryUsers,
+  clearFollowUsers,
+  clearHiddenUsers,
+  clearListUsers,
   config,
   loadConfig,
   removeCustomCategoryUser,
@@ -35,6 +39,7 @@ import {
   showConfig
 } from './state/configStore.js'
 import { exportConfigToFile, importConfigFromFile } from './state/importExport.js'
+import { getConfigSummary } from './state/configSummary.js'
 
 ;(function () {
   'use strict'
@@ -78,7 +83,7 @@ import { exportConfigToFile, importConfigFromFile } from './state/importExport.j
     await loadConfig()
     console.log(
       '[X-Observer] 設定を読み込みました:',
-      JSON.parse(JSON.stringify(config))
+      getConfigSummary(config)
     )
 
     const processor = createProcessor()
@@ -107,14 +112,18 @@ import { exportConfigToFile, importConfigFromFile } from './state/importExport.j
       removeHiddenStatus,
       addHiddenUser,
       removeHiddenUser,
+      clearHiddenUsers,
       addFollowUser,
       removeFollowUser,
+      clearFollowUsers,
       addListUser,
       removeListUser,
+      clearListUsers,
       addCustomUserCategory,
       removeCustomUserCategory,
       addCustomCategoryUser,
       removeCustomCategoryUser,
+      clearCustomCategoryUsers,
       setCustomUserCategoryColor,
       addHiddenWord,
       removeHiddenWord,

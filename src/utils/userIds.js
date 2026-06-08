@@ -30,13 +30,18 @@ export function getUserIdCandidates (postInfo) {
 
 /**
  * ユーザー ID 候補のいずれかが設定リストに含まれるか判定する。
- * 入力: ユーザー ID 候補配列、設定済みユーザー ID 配列。
+ * 入力: ユーザー ID 候補配列、設定済みユーザー ID 配列または正規化済み Set。
  * 出力: 一致したユーザー ID。無ければ null。
  * 主な処理内容:
- * 1. 登録値も比較用に正規化する
- * 2. スクリーン名と内部数字 ID のどちらでも一致できるようにする
+ * 1. Set は configIndexes 由来の正規化済みデータとしてそのまま使う
+ * 2. 配列は登録値も比較用に正規化する
+ * 3. スクリーン名と内部数字 ID のどちらでも一致できるようにする
  */
 export function findMatchingUserId (candidates, registeredUserIds) {
+  if (registeredUserIds instanceof Set) {
+    return candidates.find(userId => registeredUserIds.has(userId)) ?? null
+  }
+
   const normalizedRegistered = new Set(
     registeredUserIds
       .map(userId => normalizeUserId(userId))

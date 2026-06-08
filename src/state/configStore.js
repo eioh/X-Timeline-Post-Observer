@@ -1,4 +1,6 @@
 import { EXPIRE_MS, STORAGE_KEYS } from '../constants.js'
+import { configIndexes, rebuildConfigIndexes } from './configIndexes.js'
+import { getConfigSummary } from './configSummary.js'
 import { normalizeUserId } from '../utils/userIds.js'
 
 const DEFAULT_CUSTOM_CATEGORY_COLOR = '#f5c542'
@@ -35,6 +37,8 @@ function assignConfig (nextConfig) {
   config.hiddenStatuses = nextConfig.hiddenStatuses
   config.hideUIEnabled = nextConfig.hideUIEnabled
   config.autoRefreshEnabled = nextConfig.autoRefreshEnabled
+
+  rebuildConfigIndexes(config)
 }
 
 /**
@@ -198,6 +202,72 @@ function findCustomUserCategory (categoryId) {
 }
 
 /**
+ * ユーザー定義分類の配列位置を ID で探す。
+ * 入力: 分類 ID。
+ * 出力: 分類の index。見つからない場合は -1。
+ * 主な処理内容:
+ * 1. customUserCategories の現在順から優先順位に使う index を返す
+ */
+function findCustomUserCategoryIndex (categoryId) {
+  return config.customUserCategories.findIndex(category => category.id === categoryId)
+}
+
+/**
+ * ユーザー ID 配列に正規化後の一致値があるか判定する。
+ * 入力: ユーザー ID 配列、正規化済み ID。
+ * 出力: 一致する ID があれば true。
+ * 主な処理内容:
+ * 1. 保存済み値の表記ゆれを吸収して重複判定する
+ */
+function hasNormalizedUserId (userIds, normalizedUserId) {
+  return userIds.some(userId => normalizeUserId(userId) === normalizedUserId)
+}
+
+/**
+ * custom 分類へ追加したユーザー ID を判定インデックスへ反映する。
+ * 入力: 正規化済み ID、追加先分類 index。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 未登録または既存より前の分類なら Map を更新する
+ * 2. custom 分類の配列順優先を維持する
+ */
+function addCustomCategoryUserIndex (normalizedUserId, categoryIndex) {
+  const currentIndex = configIndexes.customUserCategoryIndexByUserId.get(normalizedUserId)
+  if (currentIndex === undefined || categoryIndex < currentIndex) {
+    configIndexes.customUserCategoryIndexByUserId.set(normalizedUserId, categoryIndex)
+  }
+}
+
+/**
+ * custom 分類から削除したユーザー ID を判定インデックスへ反映する。
+ * 入力: 正規化済み ID、削除元分類 index。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 削除元が現在の優先分類でなければ Map を触らない
+ * 2. 後続分類に同じ ID があれば次の優先先へ差し替える
+ */
+function removeCustomCategoryUserIndex (normalizedUserId, removedCategoryIndex) {
+  if (
+    configIndexes.customUserCategoryIndexByUserId.get(normalizedUserId) !==
+    removedCategoryIndex
+  ) {
+    return
+  }
+
+  const nextCategoryIndex = config.customUserCategories.findIndex((category, index) =>
+    index > removedCategoryIndex &&
+    hasNormalizedUserId(category.userIds, normalizedUserId)
+  )
+
+  if (nextCategoryIndex >= 0) {
+    configIndexes.customUserCategoryIndexByUserId.set(normalizedUserId, nextCategoryIndex)
+    return
+  }
+
+  configIndexes.customUserCategoryIndexByUserId.delete(normalizedUserId)
+}
+
+/**
  * 指定した分類へユーザー ID を追加する。
  * 入力: 保存先キー、ユーザー ID、ログ用分類名。
  * 出力: 追加できた場合は true、既存なら false。
@@ -207,11 +277,13 @@ function findCustomUserCategory (categoryId) {
  */
 function rememberClassifiedUser (configKey, userId, label) {
   const id = normalizeUserId(userId)
-  if (!id || config[configKey].includes(id)) {
+  const userIdSet = configIndexes[configKey]
+  if (!id || !userIdSet || userIdSet.has(id)) {
     return false
   }
 
   config[configKey].push(id)
+  userIdSet.add(id)
   void saveKey(configKey)
   console.log(`[X-Observer] ${label}ユーザー追加: @${id}`)
   return true
@@ -227,8 +299,9 @@ function rememberClassifiedUser (configKey, userId, label) {
  */
 export async function addHiddenUser (userId) {
   const id = normalizeUserId(userId)
-  if (!config.hiddenUserIds.includes(id)) {
+  if (id && !configIndexes.hiddenUserIds.has(id)) {
     config.hiddenUserIds.push(id)
+    configIndexes.hiddenUserIds.add(id)
     await saveKey('hiddenUserIds')
     console.log(`[X-Observer] 非表示ユーザー追加: @${id}`)
   }
@@ -237,9 +310,27 @@ export async function addHiddenUser (userId) {
 /** 非表示ユーザーを削除する。*/
 export async function removeHiddenUser (userId) {
   const id = normalizeUserId(userId)
-  config.hiddenUserIds = config.hiddenUserIds.filter(user => user !== id)
+  config.hiddenUserIds = config.hiddenUserIds.filter(
+    user => normalizeUserId(user) !== id
+  )
+  configIndexes.hiddenUserIds.delete(id)
   await saveKey('hiddenUserIds')
   console.log(`[X-Observer] 非表示ユーザー削除: @${id}`)
+}
+
+/**
+ * 非表示ユーザーをすべて削除する。
+ * 入力: なし。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 配列と判定用 Set を一度で空にする
+ * 2. ストレージ保存も一度だけ行う
+ */
+export async function clearHiddenUsers () {
+  config.hiddenUserIds = []
+  configIndexes.hiddenUserIds.clear()
+  await saveKey('hiddenUserIds')
+  console.log('[X-Observer] 非表示ユーザーをすべて削除しました')
 }
 
 /**
@@ -252,8 +343,9 @@ export async function removeHiddenUser (userId) {
  */
 export async function addFollowUser (userId) {
   const id = normalizeUserId(userId)
-  if (!config.followUserIds.includes(id)) {
+  if (id && !configIndexes.followUserIds.has(id)) {
     config.followUserIds.push(id)
+    configIndexes.followUserIds.add(id)
     await saveKey('followUserIds')
     console.log(`[X-Observer] フォローユーザー追加: @${id}`)
   }
@@ -262,9 +354,27 @@ export async function addFollowUser (userId) {
 /** フォローユーザーを削除する。*/
 export async function removeFollowUser (userId) {
   const id = normalizeUserId(userId)
-  config.followUserIds = config.followUserIds.filter(user => user !== id)
+  config.followUserIds = config.followUserIds.filter(
+    user => normalizeUserId(user) !== id
+  )
+  configIndexes.followUserIds.delete(id)
   await saveKey('followUserIds')
   console.log(`[X-Observer] フォローユーザー削除: @${id}`)
+}
+
+/**
+ * フォローユーザーをすべて削除する。
+ * 入力: なし。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 配列と判定用 Set を一度で空にする
+ * 2. ストレージ保存も一度だけ行う
+ */
+export async function clearFollowUsers () {
+  config.followUserIds = []
+  configIndexes.followUserIds.clear()
+  await saveKey('followUserIds')
+  console.log('[X-Observer] フォローユーザーをすべて削除しました')
 }
 
 /**
@@ -277,8 +387,9 @@ export async function removeFollowUser (userId) {
  */
 export async function addListUser (userId) {
   const id = normalizeUserId(userId)
-  if (!config.listUserIds.includes(id)) {
+  if (id && !configIndexes.listUserIds.has(id)) {
     config.listUserIds.push(id)
+    configIndexes.listUserIds.add(id)
     await saveKey('listUserIds')
     console.log(`[X-Observer] リストインユーザー追加: @${id}`)
   }
@@ -287,9 +398,27 @@ export async function addListUser (userId) {
 /** リストインユーザーを削除する。*/
 export async function removeListUser (userId) {
   const id = normalizeUserId(userId)
-  config.listUserIds = config.listUserIds.filter(user => user !== id)
+  config.listUserIds = config.listUserIds.filter(
+    user => normalizeUserId(user) !== id
+  )
+  configIndexes.listUserIds.delete(id)
   await saveKey('listUserIds')
   console.log(`[X-Observer] リストインユーザー削除: @${id}`)
+}
+
+/**
+ * リストインユーザーをすべて削除する。
+ * 入力: なし。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 配列と判定用 Set を一度で空にする
+ * 2. ストレージ保存も一度だけ行う
+ */
+export async function clearListUsers () {
+  config.listUserIds = []
+  configIndexes.listUserIds.clear()
+  await saveKey('listUserIds')
+  console.log('[X-Observer] リストインユーザーをすべて削除しました')
 }
 
 
@@ -336,6 +465,7 @@ export async function removeCustomUserCategory (categoryId) {
   config.customUserCategories = config.customUserCategories.filter(
     item => item.id !== categoryId
   )
+  rebuildConfigIndexes(config)
   await saveKey('customUserCategories')
   console.log(`[X-Observer] ユーザー定義分類削除: ${category?.label ?? categoryId}`)
 }
@@ -369,13 +499,15 @@ export async function setCustomUserCategoryColor (categoryId, color) {
  * 2. ユーザー ID を正規化し、未登録時だけ追加して保存する
  */
 export async function addCustomCategoryUser (categoryId, userId) {
-  const category = findCustomUserCategory(categoryId)
+  const categoryIndex = findCustomUserCategoryIndex(categoryId)
+  const category = config.customUserCategories[categoryIndex]
   const id = normalizeUserId(userId)
-  if (!category || !id || category.userIds.includes(id)) {
+  if (!category || !id || hasNormalizedUserId(category.userIds, id)) {
     return
   }
 
   category.userIds.push(id)
+  addCustomCategoryUserIndex(id, categoryIndex)
   await saveKey('customUserCategories')
   console.log(`[X-Observer] ${category.label}ユーザー追加: @${id}`)
 }
@@ -389,15 +521,37 @@ export async function addCustomCategoryUser (categoryId, userId) {
  * 2. 正規化したユーザー ID と一致しない項目だけを残す
  */
 export async function removeCustomCategoryUser (categoryId, userId) {
-  const category = findCustomUserCategory(categoryId)
+  const categoryIndex = findCustomUserCategoryIndex(categoryId)
+  const category = config.customUserCategories[categoryIndex]
   const id = normalizeUserId(userId)
   if (!category || !id) {
     return
   }
 
-  category.userIds = category.userIds.filter(user => user !== id)
+  category.userIds = category.userIds.filter(user => normalizeUserId(user) !== id)
+  removeCustomCategoryUserIndex(id, categoryIndex)
   await saveKey('customUserCategories')
   console.log(`[X-Observer] ${category.label}ユーザー削除: @${id}`)
+}
+
+/**
+ * ユーザー定義分類から全ユーザー ID を削除する。
+ * 入力: 分類 ID。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 対象分類の userIds を一度で空にする
+ * 2. custom 分類インデックスを一度だけ再構築して保存する
+ */
+export async function clearCustomCategoryUsers (categoryId) {
+  const category = findCustomUserCategory(categoryId)
+  if (!category) {
+    return
+  }
+
+  category.userIds = []
+  rebuildConfigIndexes(config)
+  await saveKey('customUserCategories')
+  console.log(`[X-Observer] ${category.label}ユーザーをすべて削除しました`)
 }
 
 /**
@@ -479,9 +633,19 @@ export async function removeHiddenStatus (statusId) {
   console.log(`[X-Observer] 非表示ポスト削除: ${statusId}`)
 }
 
-/** 現在の設定をログへ表示する。*/
-export function showConfig () {
-  console.log('[X-Observer] 現在の設定:', JSON.parse(JSON.stringify(config)))
+/**
+ * 現在の設定をログへ表示する。
+ * 入力: full を true にすると全設定を表示するオプション。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 通常は巨大配列を含まない件数サマリを表示する
+ * 2. 明示指定時だけ従来どおり全設定を表示する
+ */
+export function showConfig ({ full = false } = {}) {
+  console.log(
+    '[X-Observer] 現在の設定:',
+    full ? JSON.parse(JSON.stringify(config)) : getConfigSummary(config)
+  )
 }
 
 /**

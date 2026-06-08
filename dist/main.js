@@ -612,13 +612,18 @@
 
   /**
    * ユーザー ID 候補のいずれかが設定リストに含まれるか判定する。
-   * 入力: ユーザー ID 候補配列、設定済みユーザー ID 配列。
+   * 入力: ユーザー ID 候補配列、設定済みユーザー ID 配列または正規化済み Set。
    * 出力: 一致したユーザー ID。無ければ null。
    * 主な処理内容:
-   * 1. 登録値も比較用に正規化する
-   * 2. スクリーン名と内部数字 ID のどちらでも一致できるようにする
+   * 1. Set は configIndexes 由来の正規化済みデータとしてそのまま使う
+   * 2. 配列は登録値も比較用に正規化する
+   * 3. スクリーン名と内部数字 ID のどちらでも一致できるようにする
    */
   function findMatchingUserId (candidates, registeredUserIds) {
+    if (registeredUserIds instanceof Set) {
+      return candidates.find(userId => registeredUserIds.has(userId)) ?? null
+    }
+
     const normalizedRegistered = new Set(
       registeredUserIds
         .map(userId => normalizeUserId(userId))
@@ -626,6 +631,60 @@
     );
 
     return candidates.find(userId => normalizedRegistered.has(userId)) ?? null
+  }
+
+  // 判定用の派生インデックスを保持する。保存形式は config 側の配列を正とする。
+  const configIndexes = {
+    hiddenUserIds: new Set(),
+    followUserIds: new Set(),
+    listUserIds: new Set(),
+    customUserCategoryIndexByUserId: new Map()
+  };
+
+  /**
+   * ユーザー ID 配列から判定用 Set を作る。
+   * 入力: 保存中のユーザー ID 配列。
+   * 出力: 正規化済みユーザー ID の Set。
+   * 主な処理内容:
+   * 1. 保存済み値を比較用に正規化する
+   * 2. 空値を除いて判定時にそのまま has できる形へ変換する
+   */
+  function createUserIdSet (userIds) {
+    return new Set(
+      userIds
+        .map(userId => normalizeUserId(userId))
+        .filter(Boolean)
+    )
+  }
+
+  /**
+   * 設定全体から判定用インデックスを再構築する。
+   * 入力: 現在の config オブジェクト。
+   * 出力: なし。
+   * 主な処理内容:
+   * 1. 配列保存されたユーザー ID を Set / Map へ変換する
+   * 2. custom 分類は分類配列の先勝ち優先を維持して userId から分類 index を引けるようにする
+   */
+  function rebuildConfigIndexes (config) {
+    configIndexes.hiddenUserIds = createUserIdSet(config.hiddenUserIds);
+    configIndexes.followUserIds = createUserIdSet(config.followUserIds);
+    configIndexes.listUserIds = createUserIdSet(config.listUserIds);
+    configIndexes.customUserCategoryIndexByUserId = new Map();
+
+    config.customUserCategories.forEach((category, categoryIndex) => {
+      for (const userId of category.userIds) {
+        const normalizedUserId = normalizeUserId(userId);
+        if (
+          normalizedUserId &&
+          !configIndexes.customUserCategoryIndexByUserId.has(normalizedUserId)
+        ) {
+          configIndexes.customUserCategoryIndexByUserId.set(
+            normalizedUserId,
+            categoryIndex
+          );
+        }
+      }
+    });
   }
 
   const FOLLOW_LABEL_CLASS = 'xtlo-user-label-follow';
@@ -675,18 +734,26 @@
   function getUserLabelType (userIdCandidates, config) {
     if (userIdCandidates.length === 0) return null
 
-    if (findMatchingUserId(userIdCandidates, config.followUserIds)) {
+    if (findMatchingUserId(userIdCandidates, configIndexes.followUserIds)) {
       return { type: 'follow' }
     }
 
-    if (findMatchingUserId(userIdCandidates, config.listUserIds)) {
+    if (findMatchingUserId(userIdCandidates, configIndexes.listUserIds)) {
       return { type: 'list' }
     }
 
-    const customCategoryIndex = config.customUserCategories.findIndex(category =>
-      findMatchingUserId(userIdCandidates, category.userIds)
-    );
-    if (customCategoryIndex >= 0) {
+    let customCategoryIndex = null;
+    for (const userId of userIdCandidates) {
+      const candidateIndex = configIndexes.customUserCategoryIndexByUserId.get(userId);
+      if (
+        candidateIndex !== undefined &&
+        (customCategoryIndex === null || candidateIndex < customCategoryIndex)
+      ) {
+        customCategoryIndex = candidateIndex;
+      }
+    }
+
+    if (customCategoryIndex !== null) {
       const customCategory = config.customUserCategories[customCategoryIndex];
       return {
         type: 'custom',
@@ -841,7 +908,7 @@
 
     const hiddenUserId = findMatchingUserId(
       getUserIdCandidates(postInfo),
-      config.hiddenUserIds
+      configIndexes.hiddenUserIds
     );
     if (hiddenUserId) {
       return `hidden-user (${hiddenUserId})`
@@ -866,6 +933,33 @@
     }
 
     return null
+  }
+
+  /**
+   * 設定内容をログ向けの件数サマリへ変換する。
+   * 入力: 現在の config オブジェクト。
+   * 出力: 巨大配列を含まないサマリオブジェクト。
+   * 主な処理内容:
+   * 1. 大きなユーザー ID 配列は件数だけにする
+   * 2. custom 分類は分類ごとの件数を残して状態確認に使えるようにする
+   */
+  function getConfigSummary (config) {
+    return {
+      mediaFilterLists: config.mediaFilterLists.length,
+      hiddenUserIds: config.hiddenUserIds.length,
+      followUserIds: config.followUserIds.length,
+      listUserIds: config.listUserIds.length,
+      customUserCategories: config.customUserCategories.map(category => ({
+        id: category.id,
+        label: category.label,
+        color: category.color,
+        userIds: category.userIds.length
+      })),
+      hiddenWords: config.hiddenWords.length,
+      hiddenStatuses: config.hiddenStatuses.length,
+      hideUIEnabled: config.hideUIEnabled,
+      autoRefreshEnabled: config.autoRefreshEnabled
+    }
   }
 
   const DEFAULT_CUSTOM_CATEGORY_COLOR$1 = '#f5c542';
@@ -902,6 +996,8 @@
     config.hiddenStatuses = nextConfig.hiddenStatuses;
     config.hideUIEnabled = nextConfig.hideUIEnabled;
     config.autoRefreshEnabled = nextConfig.autoRefreshEnabled;
+
+    rebuildConfigIndexes(config);
   }
 
   /**
@@ -1065,6 +1161,72 @@
   }
 
   /**
+   * ユーザー定義分類の配列位置を ID で探す。
+   * 入力: 分類 ID。
+   * 出力: 分類の index。見つからない場合は -1。
+   * 主な処理内容:
+   * 1. customUserCategories の現在順から優先順位に使う index を返す
+   */
+  function findCustomUserCategoryIndex (categoryId) {
+    return config.customUserCategories.findIndex(category => category.id === categoryId)
+  }
+
+  /**
+   * ユーザー ID 配列に正規化後の一致値があるか判定する。
+   * 入力: ユーザー ID 配列、正規化済み ID。
+   * 出力: 一致する ID があれば true。
+   * 主な処理内容:
+   * 1. 保存済み値の表記ゆれを吸収して重複判定する
+   */
+  function hasNormalizedUserId (userIds, normalizedUserId) {
+    return userIds.some(userId => normalizeUserId(userId) === normalizedUserId)
+  }
+
+  /**
+   * custom 分類へ追加したユーザー ID を判定インデックスへ反映する。
+   * 入力: 正規化済み ID、追加先分類 index。
+   * 出力: なし。
+   * 主な処理内容:
+   * 1. 未登録または既存より前の分類なら Map を更新する
+   * 2. custom 分類の配列順優先を維持する
+   */
+  function addCustomCategoryUserIndex (normalizedUserId, categoryIndex) {
+    const currentIndex = configIndexes.customUserCategoryIndexByUserId.get(normalizedUserId);
+    if (currentIndex === undefined || categoryIndex < currentIndex) {
+      configIndexes.customUserCategoryIndexByUserId.set(normalizedUserId, categoryIndex);
+    }
+  }
+
+  /**
+   * custom 分類から削除したユーザー ID を判定インデックスへ反映する。
+   * 入力: 正規化済み ID、削除元分類 index。
+   * 出力: なし。
+   * 主な処理内容:
+   * 1. 削除元が現在の優先分類でなければ Map を触らない
+   * 2. 後続分類に同じ ID があれば次の優先先へ差し替える
+   */
+  function removeCustomCategoryUserIndex (normalizedUserId, removedCategoryIndex) {
+    if (
+      configIndexes.customUserCategoryIndexByUserId.get(normalizedUserId) !==
+      removedCategoryIndex
+    ) {
+      return
+    }
+
+    const nextCategoryIndex = config.customUserCategories.findIndex((category, index) =>
+      index > removedCategoryIndex &&
+      hasNormalizedUserId(category.userIds, normalizedUserId)
+    );
+
+    if (nextCategoryIndex >= 0) {
+      configIndexes.customUserCategoryIndexByUserId.set(normalizedUserId, nextCategoryIndex);
+      return
+    }
+
+    configIndexes.customUserCategoryIndexByUserId.delete(normalizedUserId);
+  }
+
+  /**
    * 指定した分類へユーザー ID を追加する。
    * 入力: 保存先キー、ユーザー ID、ログ用分類名。
    * 出力: 追加できた場合は true、既存なら false。
@@ -1074,11 +1236,13 @@
    */
   function rememberClassifiedUser (configKey, userId, label) {
     const id = normalizeUserId(userId);
-    if (!id || config[configKey].includes(id)) {
+    const userIdSet = configIndexes[configKey];
+    if (!id || !userIdSet || userIdSet.has(id)) {
       return false
     }
 
     config[configKey].push(id);
+    userIdSet.add(id);
     void saveKey(configKey);
     console.log(`[X-Observer] ${label}ユーザー追加: @${id}`);
     return true
@@ -1094,8 +1258,9 @@
    */
   async function addHiddenUser (userId) {
     const id = normalizeUserId(userId);
-    if (!config.hiddenUserIds.includes(id)) {
+    if (id && !configIndexes.hiddenUserIds.has(id)) {
       config.hiddenUserIds.push(id);
+      configIndexes.hiddenUserIds.add(id);
       await saveKey('hiddenUserIds');
       console.log(`[X-Observer] 非表示ユーザー追加: @${id}`);
     }
@@ -1104,9 +1269,27 @@
   /** 非表示ユーザーを削除する。*/
   async function removeHiddenUser (userId) {
     const id = normalizeUserId(userId);
-    config.hiddenUserIds = config.hiddenUserIds.filter(user => user !== id);
+    config.hiddenUserIds = config.hiddenUserIds.filter(
+      user => normalizeUserId(user) !== id
+    );
+    configIndexes.hiddenUserIds.delete(id);
     await saveKey('hiddenUserIds');
     console.log(`[X-Observer] 非表示ユーザー削除: @${id}`);
+  }
+
+  /**
+   * 非表示ユーザーをすべて削除する。
+   * 入力: なし。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. 配列と判定用 Set を一度で空にする
+   * 2. ストレージ保存も一度だけ行う
+   */
+  async function clearHiddenUsers () {
+    config.hiddenUserIds = [];
+    configIndexes.hiddenUserIds.clear();
+    await saveKey('hiddenUserIds');
+    console.log('[X-Observer] 非表示ユーザーをすべて削除しました');
   }
 
   /**
@@ -1119,8 +1302,9 @@
    */
   async function addFollowUser (userId) {
     const id = normalizeUserId(userId);
-    if (!config.followUserIds.includes(id)) {
+    if (id && !configIndexes.followUserIds.has(id)) {
       config.followUserIds.push(id);
+      configIndexes.followUserIds.add(id);
       await saveKey('followUserIds');
       console.log(`[X-Observer] フォローユーザー追加: @${id}`);
     }
@@ -1129,9 +1313,27 @@
   /** フォローユーザーを削除する。*/
   async function removeFollowUser (userId) {
     const id = normalizeUserId(userId);
-    config.followUserIds = config.followUserIds.filter(user => user !== id);
+    config.followUserIds = config.followUserIds.filter(
+      user => normalizeUserId(user) !== id
+    );
+    configIndexes.followUserIds.delete(id);
     await saveKey('followUserIds');
     console.log(`[X-Observer] フォローユーザー削除: @${id}`);
+  }
+
+  /**
+   * フォローユーザーをすべて削除する。
+   * 入力: なし。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. 配列と判定用 Set を一度で空にする
+   * 2. ストレージ保存も一度だけ行う
+   */
+  async function clearFollowUsers () {
+    config.followUserIds = [];
+    configIndexes.followUserIds.clear();
+    await saveKey('followUserIds');
+    console.log('[X-Observer] フォローユーザーをすべて削除しました');
   }
 
   /**
@@ -1144,8 +1346,9 @@
    */
   async function addListUser (userId) {
     const id = normalizeUserId(userId);
-    if (!config.listUserIds.includes(id)) {
+    if (id && !configIndexes.listUserIds.has(id)) {
       config.listUserIds.push(id);
+      configIndexes.listUserIds.add(id);
       await saveKey('listUserIds');
       console.log(`[X-Observer] リストインユーザー追加: @${id}`);
     }
@@ -1154,9 +1357,27 @@
   /** リストインユーザーを削除する。*/
   async function removeListUser (userId) {
     const id = normalizeUserId(userId);
-    config.listUserIds = config.listUserIds.filter(user => user !== id);
+    config.listUserIds = config.listUserIds.filter(
+      user => normalizeUserId(user) !== id
+    );
+    configIndexes.listUserIds.delete(id);
     await saveKey('listUserIds');
     console.log(`[X-Observer] リストインユーザー削除: @${id}`);
+  }
+
+  /**
+   * リストインユーザーをすべて削除する。
+   * 入力: なし。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. 配列と判定用 Set を一度で空にする
+   * 2. ストレージ保存も一度だけ行う
+   */
+  async function clearListUsers () {
+    config.listUserIds = [];
+    configIndexes.listUserIds.clear();
+    await saveKey('listUserIds');
+    console.log('[X-Observer] リストインユーザーをすべて削除しました');
   }
 
 
@@ -1203,6 +1424,7 @@
     config.customUserCategories = config.customUserCategories.filter(
       item => item.id !== categoryId
     );
+    rebuildConfigIndexes(config);
     await saveKey('customUserCategories');
     console.log(`[X-Observer] ユーザー定義分類削除: ${category?.label ?? categoryId}`);
   }
@@ -1236,13 +1458,15 @@
    * 2. ユーザー ID を正規化し、未登録時だけ追加して保存する
    */
   async function addCustomCategoryUser (categoryId, userId) {
-    const category = findCustomUserCategory(categoryId);
+    const categoryIndex = findCustomUserCategoryIndex(categoryId);
+    const category = config.customUserCategories[categoryIndex];
     const id = normalizeUserId(userId);
-    if (!category || !id || category.userIds.includes(id)) {
+    if (!category || !id || hasNormalizedUserId(category.userIds, id)) {
       return
     }
 
     category.userIds.push(id);
+    addCustomCategoryUserIndex(id, categoryIndex);
     await saveKey('customUserCategories');
     console.log(`[X-Observer] ${category.label}ユーザー追加: @${id}`);
   }
@@ -1256,15 +1480,37 @@
    * 2. 正規化したユーザー ID と一致しない項目だけを残す
    */
   async function removeCustomCategoryUser (categoryId, userId) {
-    const category = findCustomUserCategory(categoryId);
+    const categoryIndex = findCustomUserCategoryIndex(categoryId);
+    const category = config.customUserCategories[categoryIndex];
     const id = normalizeUserId(userId);
     if (!category || !id) {
       return
     }
 
-    category.userIds = category.userIds.filter(user => user !== id);
+    category.userIds = category.userIds.filter(user => normalizeUserId(user) !== id);
+    removeCustomCategoryUserIndex(id, categoryIndex);
     await saveKey('customUserCategories');
     console.log(`[X-Observer] ${category.label}ユーザー削除: @${id}`);
+  }
+
+  /**
+   * ユーザー定義分類から全ユーザー ID を削除する。
+   * 入力: 分類 ID。
+   * 出力: Promise<void>
+   * 主な処理内容:
+   * 1. 対象分類の userIds を一度で空にする
+   * 2. custom 分類インデックスを一度だけ再構築して保存する
+   */
+  async function clearCustomCategoryUsers (categoryId) {
+    const category = findCustomUserCategory(categoryId);
+    if (!category) {
+      return
+    }
+
+    category.userIds = [];
+    rebuildConfigIndexes(config);
+    await saveKey('customUserCategories');
+    console.log(`[X-Observer] ${category.label}ユーザーをすべて削除しました`);
   }
 
   /**
@@ -1346,9 +1592,19 @@
     console.log(`[X-Observer] 非表示ポスト削除: ${statusId}`);
   }
 
-  /** 現在の設定をログへ表示する。*/
-  function showConfig () {
-    console.log('[X-Observer] 現在の設定:', JSON.parse(JSON.stringify(config)));
+  /**
+   * 現在の設定をログへ表示する。
+   * 入力: full を true にすると全設定を表示するオプション。
+   * 出力: なし。
+   * 主な処理内容:
+   * 1. 通常は巨大配列を含まない件数サマリを表示する
+   * 2. 明示指定時だけ従来どおり全設定を表示する
+   */
+  function showConfig ({ full = false } = {}) {
+    console.log(
+      '[X-Observer] 現在の設定:',
+      full ? JSON.parse(JSON.stringify(config)) : getConfigSummary(config)
+    );
   }
 
   /**
@@ -2659,69 +2915,120 @@
   }
 
   /**
-   * 設定配列をタブごとの一覧データへ変換する。
+   * タブごとの一覧データモデルを返す。
    * 入力: タブキー。
-   * 出力: 表示用アイテム配列。
+   * 出力: raw 配列、表示用変換、検索判定を持つモデル。
    * 主な処理内容:
-   * 1. config の保存形式を UI 用の title / subtitle へ整形する
-   * 2. hiddenStatuses だけは期限日時も添えて表示する
+   * 1. 保存配列を表示直前まで raw のまま扱う
+   * 2. ページネーション後に必要な項目だけ item 化できるようにする
    */
-  function getItemsForTab (tabKey) {
+  function getTabListModel (tabKey) {
     if (tabKey === 'users') {
-      return config.hiddenUserIds.map(value => ({
-        value,
-        title: `@${value}`,
-        subtitle: 'ユーザーID'
-      }))
+      return createUserIdListModel(config.hiddenUserIds, 'ユーザーID')
     }
 
     if (tabKey === 'follow') {
-      return config.followUserIds.map(value => ({
-        value,
-        title: `@${value}`,
-        subtitle: 'フォローユーザー'
-      }))
+      return createUserIdListModel(config.followUserIds, 'フォローユーザー')
     }
 
     if (tabKey === 'list') {
-      return config.listUserIds.map(value => ({
-        value,
-        title: `@${value}`,
-        subtitle: 'リストインユーザー'
-      }))
+      return createUserIdListModel(config.listUserIds, 'リストインユーザー')
     }
 
 
     const customCategory = getCustomCategoryForTab(tabKey);
     if (customCategory) {
-      return customCategory.userIds.map(value => ({
-        value,
-        title: `@${value}`,
-        subtitle: `${customCategory.label}ユーザー`
-      }))
+      return createUserIdListModel(
+        customCategory.userIds,
+        `${customCategory.label}ユーザー`
+      )
     }
 
     if (tabKey === 'statuses') {
-      return config.hiddenStatuses.map(entry => ({
-        value: entry.statusId,
-        title: entry.statusId,
-        subtitle: `期限: ${new Date(entry.expiresAt).toLocaleString('ja-JP')}`
-      }))
+      return {
+        rawItems: config.hiddenStatuses,
+        toItem: entry => ({
+          value: entry.statusId,
+          title: entry.statusId,
+          subtitle: `期限: ${new Date(entry.expiresAt).toLocaleString('ja-JP')}`
+        }),
+        matchesQuery: (entry, normalizedQuery) => {
+          const subtitle = `期限: ${new Date(entry.expiresAt).toLocaleString('ja-JP')}`;
+          return [entry.statusId, subtitle].some(value =>
+            String(value).toLowerCase().includes(normalizedQuery)
+          )
+        }
+      }
     }
 
     if (tabKey === 'words') {
-      return config.hiddenWords.map(value => ({
-        value,
-        title: value,
-        subtitle: 'キーワード'
-      }))
+      return createTextListModel(config.hiddenWords, 'キーワード')
     }
 
-    return config.mediaFilterLists.map(value => ({
-      value,
-      title: value,
-      subtitle: 'メディアフィルタ'
-    }))
+    return createTextListModel(config.mediaFilterLists, 'メディアフィルタ')
+  }
+
+  /**
+   * ユーザー ID 系の一覧モデルを作る。
+   * 入力: ユーザー ID 配列、サブタイトル。
+   * 出力: raw 配列を表示・検索するためのモデル。
+   * 主な処理内容:
+   * 1. @付きタイトルは表示時だけ生成する
+   * 2. 検索時は raw 文字列と固定文言だけで判定する
+   */
+  function createUserIdListModel (rawItems, subtitle) {
+    return {
+      rawItems,
+      toItem: value => ({
+        value,
+        title: `@${value}`,
+        subtitle
+      }),
+      matchesQuery: (value, normalizedQuery) =>
+        [value, `@${value}`, subtitle].some(item =>
+          String(item).toLowerCase().includes(normalizedQuery)
+        )
+    }
+  }
+
+  /**
+   * 単純な文字列一覧モデルを作る。
+   * 入力: 文字列配列、サブタイトル。
+   * 出力: raw 配列を表示・検索するためのモデル。
+   * 主な処理内容:
+   * 1. 表示項目はページ内だけで生成する
+   * 2. 検索時は raw 文字列と固定文言だけで判定する
+   */
+  function createTextListModel (rawItems, subtitle) {
+    return {
+      rawItems,
+      toItem: value => ({
+        value,
+        title: value,
+        subtitle
+      }),
+      matchesQuery: (value, normalizedQuery) =>
+        [value, subtitle].some(item =>
+          String(item).toLowerCase().includes(normalizedQuery)
+        )
+    }
+  }
+
+  /**
+   * 検索語に一致する raw 項目だけを返す。
+   * 入力: 一覧モデルと検索語。
+   * 出力: 検索語が空なら raw 配列、一致語がある場合は絞り込み後の配列。
+   * 主な処理内容:
+   * 1. 検索なしでは元配列をそのまま返して全件走査を避ける
+   * 2. 検索ありではモデルごとの軽量判定で絞り込む
+   */
+  function filterRawItemsByQuery (model, query) {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) {
+      return model.rawItems
+    }
+
+    return model.rawItems.filter(item => model.matchesQuery(item, normalizedQuery))
   }
 
   /**
@@ -2764,26 +3071,6 @@
   }
 
   /**
-   * 検索語に一致する表示項目だけを返す。
-   * 入力: 表示項目配列と検索語。
-   * 出力: 検索語が空なら元の配列、一致語がある場合は絞り込み後の配列。
-   * 主な処理内容:
-   * 1. title / subtitle / value を小文字化して検索対象にする
-   * 2. 数千件でも削除対象を探しやすいよう、部分一致した項目だけを残す
-   */
-  function filterItemsByQuery (items, query) {
-    const normalizedQuery = query.trim().toLowerCase();
-    if (!normalizedQuery) {
-      return items
-    }
-
-    return items.filter(item =>
-      [item.title, item.subtitle, item.value]
-        .some(value => String(value).toLowerCase().includes(normalizedQuery))
-    )
-  }
-
-  /**
    * ダイアログに使う設定 UI を生成する。
    * 入力: 各種追加・削除・保存コールバック。
    * 出力: open / close を持つオブジェクト。
@@ -2797,14 +3084,18 @@
     removeHiddenStatus,
     addHiddenUser,
     removeHiddenUser,
+    clearHiddenUsers,
     addFollowUser,
     removeFollowUser,
+    clearFollowUsers,
     addListUser,
     removeListUser,
+    clearListUsers,
     addCustomUserCategory,
     removeCustomUserCategory,
     addCustomCategoryUser,
     removeCustomCategoryUser,
+    clearCustomCategoryUsers,
     setCustomUserCategoryColor,
     addHiddenWord,
     removeHiddenWord,
@@ -2880,16 +3171,14 @@
     function getTabActions (tabKey) {
       if (tabKey === 'users') {
         return {
-          items: getItemsForTab(tabKey),
+          itemCount: getTabListModel(tabKey).rawItems.length,
           addLabel: 'Add',
           clearLabel: 'Clear all users',
           totalLabel: 'Active Filters',
           addItem: async value => addHiddenUser(value),
           removeItem: async value => removeHiddenUser(value),
           clearAll: async () => {
-            for (const value of [...config.hiddenUserIds]) {
-              await removeHiddenUser(value);
-            }
+            await clearHiddenUsers();
             reapplyFilters();
           },
           normalizeInput: value => normalizeUserId(value)
@@ -2898,16 +3187,14 @@
 
       if (tabKey === 'follow') {
         return {
-          items: getItemsForTab(tabKey),
+          itemCount: getTabListModel(tabKey).rawItems.length,
           addLabel: 'Add',
           clearLabel: 'Clear all follows',
           totalLabel: 'Known Users',
           addItem: async value => addFollowUser(value),
           removeItem: async value => removeFollowUser(value),
           clearAll: async () => {
-            for (const value of [...config.followUserIds]) {
-              await removeFollowUser(value);
-            }
+            await clearFollowUsers();
             reapplyFilters();
           },
           normalizeInput: value => normalizeUserId(value)
@@ -2916,16 +3203,14 @@
 
       if (tabKey === 'list') {
         return {
-          items: getItemsForTab(tabKey),
+          itemCount: getTabListModel(tabKey).rawItems.length,
           addLabel: 'Add',
           clearLabel: 'Clear all lists',
           totalLabel: 'Known Users',
           addItem: async value => addListUser(value),
           removeItem: async value => removeListUser(value),
           clearAll: async () => {
-            for (const value of [...config.listUserIds]) {
-              await removeListUser(value);
-            }
+            await clearListUsers();
             reapplyFilters();
           },
           normalizeInput: value => normalizeUserId(value)
@@ -2936,16 +3221,14 @@
       const customCategory = getCustomCategoryForTab(tabKey);
       if (customCategory) {
         return {
-          items: getItemsForTab(tabKey),
+          itemCount: getTabListModel(tabKey).rawItems.length,
           addLabel: 'Add',
           clearLabel: `Clear all ${customCategory.label}`,
           totalLabel: 'Known Users',
           addItem: async value => addCustomCategoryUser(customCategory.id, value),
           removeItem: async value => removeCustomCategoryUser(customCategory.id, value),
           clearAll: async () => {
-            for (const value of [...customCategory.userIds]) {
-              await removeCustomCategoryUser(customCategory.id, value);
-            }
+            await clearCustomCategoryUsers(customCategory.id);
             reapplyFilters();
           },
           normalizeInput: value => normalizeUserId(value)
@@ -2954,7 +3237,7 @@
 
       if (tabKey === 'statuses') {
         return {
-          items: getItemsForTab(tabKey),
+          itemCount: getTabListModel(tabKey).rawItems.length,
           addLabel: 'Add',
           clearLabel: 'Clear all posts',
           totalLabel: 'Active Filters',
@@ -2972,7 +3255,7 @@
 
       if (tabKey === 'words') {
         return {
-          items: getItemsForTab(tabKey),
+          itemCount: getTabListModel(tabKey).rawItems.length,
           addLabel: 'Add',
           clearLabel: 'Clear all words',
           totalLabel: 'Active Filters',
@@ -2989,7 +3272,7 @@
       }
 
       return {
-        items: getItemsForTab(tabKey),
+        itemCount: getTabListModel(tabKey).rawItems.length,
         addLabel: 'Add',
         clearLabel: 'Clear all media',
         totalLabel: 'Media Filters',
@@ -3283,14 +3566,17 @@
 
       const tabDefinition = getAllTabDefinitions().find(tab => tab.key === currentTab);
       const actions = getTabActions(currentTab);
-      const totalItems = actions.items.length;
+      const listModel = getTabListModel(currentTab);
+      const totalItems = listModel.rawItems.length;
       const searchQuery = searchByTab[currentTab] ?? '';
-      const filteredItems = filterItemsByQuery(actions.items, searchQuery);
-      const totalPages = Math.max(1, Math.ceil(filteredItems.length / PAGE_SIZE));
+      const filteredRawItems = filterRawItemsByQuery(listModel, searchQuery);
+      const totalPages = Math.max(1, Math.ceil(filteredRawItems.length / PAGE_SIZE));
       const currentPage = Math.min(pageByTab[currentTab], totalPages);
       pageByTab[currentTab] = currentPage;
       const startIndex = (currentPage - 1) * PAGE_SIZE;
-      const visibleItems = filteredItems.slice(startIndex, startIndex + PAGE_SIZE);
+      const visibleItems = filteredRawItems
+        .slice(startIndex, startIndex + PAGE_SIZE)
+        .map(item => listModel.toItem(item));
 
       const listMarkup = visibleItems.length
         ? visibleItems
@@ -3326,7 +3612,7 @@
 
       footer.innerHTML = `
       <button class="xtlo-settings-clear" data-action="clear-all">${actions.clearLabel}</button>
-      <div class="xtlo-settings-badge">${getFilteredFooterBadgeLabel(currentTab, filteredItems.length, totalItems)}</div>
+      <div class="xtlo-settings-badge">${getFilteredFooterBadgeLabel(currentTab, filteredRawItems.length, totalItems)}</div>
     `;
     }
 
@@ -3372,8 +3658,8 @@
       await actions.removeItem(value);
       reapplyFilters();
 
-      const remainingCount = filterItemsByQuery(
-        getItemsForTab(currentTab),
+      const remainingCount = filterRawItemsByQuery(
+        getTabListModel(currentTab),
         searchByTab[currentTab] ?? ''
       ).length;
       const maxPage = Math.max(1, Math.ceil(remainingCount / PAGE_SIZE));
@@ -3461,7 +3747,7 @@
 
     async function handleClearAll () {
       const actions = getTabActions(currentTab);
-      if (actions.items.length === 0) return
+      if (actions.itemCount === 0) return
 
       if (!confirm('このタブの項目をすべて削除しますか？')) {
         return
@@ -3481,8 +3767,8 @@
      * 2. 補正後の値を state と表示へ反映する
      */
     function applyPageInput (rawValue) {
-      const filteredItems = filterItemsByQuery(
-        getTabActions(currentTab).items,
+      const filteredItems = filterRawItemsByQuery(
+        getTabListModel(currentTab),
         searchByTab[currentTab] ?? ''
       );
       const totalPages = Math.max(1, Math.ceil(filteredItems.length / PAGE_SIZE));
@@ -4225,7 +4511,7 @@
 
       console.log(
         '[X-Observer] 設定をインポートしました:',
-        JSON.parse(JSON.stringify(config))
+        getConfigSummary(config)
       );
       alert('設定をインポートしました');
     } catch (error) {
@@ -4276,7 +4562,7 @@
       await loadConfig();
       console.log(
         '[X-Observer] 設定を読み込みました:',
-        JSON.parse(JSON.stringify(config))
+        getConfigSummary(config)
       );
 
       const processor = createProcessor();
@@ -4305,14 +4591,18 @@
         removeHiddenStatus,
         addHiddenUser,
         removeHiddenUser,
+        clearHiddenUsers,
         addFollowUser,
         removeFollowUser,
+        clearFollowUsers,
         addListUser,
         removeListUser,
+        clearListUsers,
         addCustomUserCategory,
         removeCustomUserCategory,
         addCustomCategoryUser,
         removeCustomCategoryUser,
+        clearCustomCategoryUsers,
         setCustomUserCategoryColor,
         addHiddenWord,
         removeHiddenWord,

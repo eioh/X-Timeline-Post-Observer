@@ -1,4 +1,5 @@
 import { findMatchingUserId, getUserIdCandidates } from '../utils/userIds.js'
+import { configIndexes } from '../state/configIndexes.js'
 
 const FOLLOW_LABEL_CLASS = 'xtlo-user-label-follow'
 const LIST_LABEL_CLASS = 'xtlo-user-label-list'
@@ -47,18 +48,26 @@ export function applyUserLabelStyles () {
 function getUserLabelType (userIdCandidates, config) {
   if (userIdCandidates.length === 0) return null
 
-  if (findMatchingUserId(userIdCandidates, config.followUserIds)) {
+  if (findMatchingUserId(userIdCandidates, configIndexes.followUserIds)) {
     return { type: 'follow' }
   }
 
-  if (findMatchingUserId(userIdCandidates, config.listUserIds)) {
+  if (findMatchingUserId(userIdCandidates, configIndexes.listUserIds)) {
     return { type: 'list' }
   }
 
-  const customCategoryIndex = config.customUserCategories.findIndex(category =>
-    findMatchingUserId(userIdCandidates, category.userIds)
-  )
-  if (customCategoryIndex >= 0) {
+  let customCategoryIndex = null
+  for (const userId of userIdCandidates) {
+    const candidateIndex = configIndexes.customUserCategoryIndexByUserId.get(userId)
+    if (
+      candidateIndex !== undefined &&
+      (customCategoryIndex === null || candidateIndex < customCategoryIndex)
+    ) {
+      customCategoryIndex = candidateIndex
+    }
+  }
+
+  if (customCategoryIndex !== null) {
     const customCategory = config.customUserCategories[customCategoryIndex]
     return {
       type: 'custom',

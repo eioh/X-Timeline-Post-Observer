@@ -692,69 +692,120 @@ function normalizePageNumber (value, totalPages) {
 }
 
 /**
- * 設定配列をタブごとの一覧データへ変換する。
+ * タブごとの一覧データモデルを返す。
  * 入力: タブキー。
- * 出力: 表示用アイテム配列。
+ * 出力: raw 配列、表示用変換、検索判定を持つモデル。
  * 主な処理内容:
- * 1. config の保存形式を UI 用の title / subtitle へ整形する
- * 2. hiddenStatuses だけは期限日時も添えて表示する
+ * 1. 保存配列を表示直前まで raw のまま扱う
+ * 2. ページネーション後に必要な項目だけ item 化できるようにする
  */
-function getItemsForTab (tabKey) {
+function getTabListModel (tabKey) {
   if (tabKey === 'users') {
-    return config.hiddenUserIds.map(value => ({
-      value,
-      title: `@${value}`,
-      subtitle: 'ユーザーID'
-    }))
+    return createUserIdListModel(config.hiddenUserIds, 'ユーザーID')
   }
 
   if (tabKey === 'follow') {
-    return config.followUserIds.map(value => ({
-      value,
-      title: `@${value}`,
-      subtitle: 'フォローユーザー'
-    }))
+    return createUserIdListModel(config.followUserIds, 'フォローユーザー')
   }
 
   if (tabKey === 'list') {
-    return config.listUserIds.map(value => ({
-      value,
-      title: `@${value}`,
-      subtitle: 'リストインユーザー'
-    }))
+    return createUserIdListModel(config.listUserIds, 'リストインユーザー')
   }
 
 
   const customCategory = getCustomCategoryForTab(tabKey)
   if (customCategory) {
-    return customCategory.userIds.map(value => ({
-      value,
-      title: `@${value}`,
-      subtitle: `${customCategory.label}ユーザー`
-    }))
+    return createUserIdListModel(
+      customCategory.userIds,
+      `${customCategory.label}ユーザー`
+    )
   }
 
   if (tabKey === 'statuses') {
-    return config.hiddenStatuses.map(entry => ({
-      value: entry.statusId,
-      title: entry.statusId,
-      subtitle: `期限: ${new Date(entry.expiresAt).toLocaleString('ja-JP')}`
-    }))
+    return {
+      rawItems: config.hiddenStatuses,
+      toItem: entry => ({
+        value: entry.statusId,
+        title: entry.statusId,
+        subtitle: `期限: ${new Date(entry.expiresAt).toLocaleString('ja-JP')}`
+      }),
+      matchesQuery: (entry, normalizedQuery) => {
+        const subtitle = `期限: ${new Date(entry.expiresAt).toLocaleString('ja-JP')}`
+        return [entry.statusId, subtitle].some(value =>
+          String(value).toLowerCase().includes(normalizedQuery)
+        )
+      }
+    }
   }
 
   if (tabKey === 'words') {
-    return config.hiddenWords.map(value => ({
-      value,
-      title: value,
-      subtitle: 'キーワード'
-    }))
+    return createTextListModel(config.hiddenWords, 'キーワード')
   }
 
-  return config.mediaFilterLists.map(value => ({
-    value,
-    title: value,
-    subtitle: 'メディアフィルタ'
-  }))
+  return createTextListModel(config.mediaFilterLists, 'メディアフィルタ')
+}
+
+/**
+ * ユーザー ID 系の一覧モデルを作る。
+ * 入力: ユーザー ID 配列、サブタイトル。
+ * 出力: raw 配列を表示・検索するためのモデル。
+ * 主な処理内容:
+ * 1. @付きタイトルは表示時だけ生成する
+ * 2. 検索時は raw 文字列と固定文言だけで判定する
+ */
+function createUserIdListModel (rawItems, subtitle) {
+  return {
+    rawItems,
+    toItem: value => ({
+      value,
+      title: `@${value}`,
+      subtitle
+    }),
+    matchesQuery: (value, normalizedQuery) =>
+      [value, `@${value}`, subtitle].some(item =>
+        String(item).toLowerCase().includes(normalizedQuery)
+      )
+  }
+}
+
+/**
+ * 単純な文字列一覧モデルを作る。
+ * 入力: 文字列配列、サブタイトル。
+ * 出力: raw 配列を表示・検索するためのモデル。
+ * 主な処理内容:
+ * 1. 表示項目はページ内だけで生成する
+ * 2. 検索時は raw 文字列と固定文言だけで判定する
+ */
+function createTextListModel (rawItems, subtitle) {
+  return {
+    rawItems,
+    toItem: value => ({
+      value,
+      title: value,
+      subtitle
+    }),
+    matchesQuery: (value, normalizedQuery) =>
+      [value, subtitle].some(item =>
+        String(item).toLowerCase().includes(normalizedQuery)
+      )
+  }
+}
+
+/**
+ * 検索語に一致する raw 項目だけを返す。
+ * 入力: 一覧モデルと検索語。
+ * 出力: 検索語が空なら raw 配列、一致語がある場合は絞り込み後の配列。
+ * 主な処理内容:
+ * 1. 検索なしでは元配列をそのまま返して全件走査を避ける
+ * 2. 検索ありではモデルごとの軽量判定で絞り込む
+ */
+function filterRawItemsByQuery (model, query) {
+  const normalizedQuery = query.trim().toLowerCase()
+  if (!normalizedQuery) {
+    return model.rawItems
+  }
+
+  return model.rawItems.filter(item => model.matchesQuery(item, normalizedQuery))
 }
 
 /**
@@ -797,26 +848,6 @@ function getDefaultTabForCategory (categoryKey) {
 }
 
 /**
- * 検索語に一致する表示項目だけを返す。
- * 入力: 表示項目配列と検索語。
- * 出力: 検索語が空なら元の配列、一致語がある場合は絞り込み後の配列。
- * 主な処理内容:
- * 1. title / subtitle / value を小文字化して検索対象にする
- * 2. 数千件でも削除対象を探しやすいよう、部分一致した項目だけを残す
- */
-function filterItemsByQuery (items, query) {
-  const normalizedQuery = query.trim().toLowerCase()
-  if (!normalizedQuery) {
-    return items
-  }
-
-  return items.filter(item =>
-    [item.title, item.subtitle, item.value]
-      .some(value => String(value).toLowerCase().includes(normalizedQuery))
-  )
-}
-
-/**
  * ダイアログに使う設定 UI を生成する。
  * 入力: 各種追加・削除・保存コールバック。
  * 出力: open / close を持つオブジェクト。
@@ -830,14 +861,18 @@ export function createSettingsDialog ({
   removeHiddenStatus,
   addHiddenUser,
   removeHiddenUser,
+  clearHiddenUsers,
   addFollowUser,
   removeFollowUser,
+  clearFollowUsers,
   addListUser,
   removeListUser,
+  clearListUsers,
   addCustomUserCategory,
   removeCustomUserCategory,
   addCustomCategoryUser,
   removeCustomCategoryUser,
+  clearCustomCategoryUsers,
   setCustomUserCategoryColor,
   addHiddenWord,
   removeHiddenWord,
@@ -913,16 +948,14 @@ export function createSettingsDialog ({
   function getTabActions (tabKey) {
     if (tabKey === 'users') {
       return {
-        items: getItemsForTab(tabKey),
+        itemCount: getTabListModel(tabKey).rawItems.length,
         addLabel: 'Add',
         clearLabel: 'Clear all users',
         totalLabel: 'Active Filters',
         addItem: async value => addHiddenUser(value),
         removeItem: async value => removeHiddenUser(value),
         clearAll: async () => {
-          for (const value of [...config.hiddenUserIds]) {
-            await removeHiddenUser(value)
-          }
+          await clearHiddenUsers()
           reapplyFilters()
         },
         normalizeInput: value => normalizeUserId(value)
@@ -931,16 +964,14 @@ export function createSettingsDialog ({
 
     if (tabKey === 'follow') {
       return {
-        items: getItemsForTab(tabKey),
+        itemCount: getTabListModel(tabKey).rawItems.length,
         addLabel: 'Add',
         clearLabel: 'Clear all follows',
         totalLabel: 'Known Users',
         addItem: async value => addFollowUser(value),
         removeItem: async value => removeFollowUser(value),
         clearAll: async () => {
-          for (const value of [...config.followUserIds]) {
-            await removeFollowUser(value)
-          }
+          await clearFollowUsers()
           reapplyFilters()
         },
         normalizeInput: value => normalizeUserId(value)
@@ -949,16 +980,14 @@ export function createSettingsDialog ({
 
     if (tabKey === 'list') {
       return {
-        items: getItemsForTab(tabKey),
+        itemCount: getTabListModel(tabKey).rawItems.length,
         addLabel: 'Add',
         clearLabel: 'Clear all lists',
         totalLabel: 'Known Users',
         addItem: async value => addListUser(value),
         removeItem: async value => removeListUser(value),
         clearAll: async () => {
-          for (const value of [...config.listUserIds]) {
-            await removeListUser(value)
-          }
+          await clearListUsers()
           reapplyFilters()
         },
         normalizeInput: value => normalizeUserId(value)
@@ -969,16 +998,14 @@ export function createSettingsDialog ({
     const customCategory = getCustomCategoryForTab(tabKey)
     if (customCategory) {
       return {
-        items: getItemsForTab(tabKey),
+        itemCount: getTabListModel(tabKey).rawItems.length,
         addLabel: 'Add',
         clearLabel: `Clear all ${customCategory.label}`,
         totalLabel: 'Known Users',
         addItem: async value => addCustomCategoryUser(customCategory.id, value),
         removeItem: async value => removeCustomCategoryUser(customCategory.id, value),
         clearAll: async () => {
-          for (const value of [...customCategory.userIds]) {
-            await removeCustomCategoryUser(customCategory.id, value)
-          }
+          await clearCustomCategoryUsers(customCategory.id)
           reapplyFilters()
         },
         normalizeInput: value => normalizeUserId(value)
@@ -987,7 +1014,7 @@ export function createSettingsDialog ({
 
     if (tabKey === 'statuses') {
       return {
-        items: getItemsForTab(tabKey),
+        itemCount: getTabListModel(tabKey).rawItems.length,
         addLabel: 'Add',
         clearLabel: 'Clear all posts',
         totalLabel: 'Active Filters',
@@ -1005,7 +1032,7 @@ export function createSettingsDialog ({
 
     if (tabKey === 'words') {
       return {
-        items: getItemsForTab(tabKey),
+        itemCount: getTabListModel(tabKey).rawItems.length,
         addLabel: 'Add',
         clearLabel: 'Clear all words',
         totalLabel: 'Active Filters',
@@ -1022,7 +1049,7 @@ export function createSettingsDialog ({
     }
 
     return {
-      items: getItemsForTab(tabKey),
+      itemCount: getTabListModel(tabKey).rawItems.length,
       addLabel: 'Add',
       clearLabel: 'Clear all media',
       totalLabel: 'Media Filters',
@@ -1316,14 +1343,17 @@ export function createSettingsDialog ({
 
     const tabDefinition = getAllTabDefinitions().find(tab => tab.key === currentTab)
     const actions = getTabActions(currentTab)
-    const totalItems = actions.items.length
+    const listModel = getTabListModel(currentTab)
+    const totalItems = listModel.rawItems.length
     const searchQuery = searchByTab[currentTab] ?? ''
-    const filteredItems = filterItemsByQuery(actions.items, searchQuery)
-    const totalPages = Math.max(1, Math.ceil(filteredItems.length / PAGE_SIZE))
+    const filteredRawItems = filterRawItemsByQuery(listModel, searchQuery)
+    const totalPages = Math.max(1, Math.ceil(filteredRawItems.length / PAGE_SIZE))
     const currentPage = Math.min(pageByTab[currentTab], totalPages)
     pageByTab[currentTab] = currentPage
     const startIndex = (currentPage - 1) * PAGE_SIZE
-    const visibleItems = filteredItems.slice(startIndex, startIndex + PAGE_SIZE)
+    const visibleItems = filteredRawItems
+      .slice(startIndex, startIndex + PAGE_SIZE)
+      .map(item => listModel.toItem(item))
 
     const listMarkup = visibleItems.length
       ? visibleItems
@@ -1359,7 +1389,7 @@ export function createSettingsDialog ({
 
     footer.innerHTML = `
       <button class="xtlo-settings-clear" data-action="clear-all">${actions.clearLabel}</button>
-      <div class="xtlo-settings-badge">${getFilteredFooterBadgeLabel(currentTab, filteredItems.length, totalItems)}</div>
+      <div class="xtlo-settings-badge">${getFilteredFooterBadgeLabel(currentTab, filteredRawItems.length, totalItems)}</div>
     `
   }
 
@@ -1405,8 +1435,8 @@ export function createSettingsDialog ({
     await actions.removeItem(value)
     reapplyFilters()
 
-    const remainingCount = filterItemsByQuery(
-      getItemsForTab(currentTab),
+    const remainingCount = filterRawItemsByQuery(
+      getTabListModel(currentTab),
       searchByTab[currentTab] ?? ''
     ).length
     const maxPage = Math.max(1, Math.ceil(remainingCount / PAGE_SIZE))
@@ -1494,7 +1524,7 @@ export function createSettingsDialog ({
 
   async function handleClearAll () {
     const actions = getTabActions(currentTab)
-    if (actions.items.length === 0) return
+    if (actions.itemCount === 0) return
 
     if (!confirm('このタブの項目をすべて削除しますか？')) {
       return
@@ -1514,8 +1544,8 @@ export function createSettingsDialog ({
    * 2. 補正後の値を state と表示へ反映する
    */
   function applyPageInput (rawValue) {
-    const filteredItems = filterItemsByQuery(
-      getTabActions(currentTab).items,
+    const filteredItems = filterRawItemsByQuery(
+      getTabListModel(currentTab),
       searchByTab[currentTab] ?? ''
     )
     const totalPages = Math.max(1, Math.ceil(filteredItems.length / PAGE_SIZE))

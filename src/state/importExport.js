@@ -1,6 +1,7 @@
 import { EXPORT_VERSION } from '../constants.js'
 import { normalizeUserId } from '../utils/userIds.js'
 import { config, loadConfig, replaceConfig } from './configStore.js'
+import { getConfigSummary } from './configSummary.js'
 
 /**
  * 現在の設定をエクスポート用オブジェクトへ整形する。
@@ -260,7 +261,7 @@ export async function importConfigFromFile ({ reapplyFilters }) {
 
     console.log(
       '[X-Observer] 設定をインポートしました:',
-      JSON.parse(JSON.stringify(config))
+      getConfigSummary(config)
     )
     alert('設定をインポートしました')
   } catch (error) {

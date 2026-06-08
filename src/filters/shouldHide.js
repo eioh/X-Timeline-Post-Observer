@@ -1,3 +1,4 @@
+import { configIndexes } from '../state/configIndexes.js'
 import { findMatchingUserId, getUserIdCandidates } from '../utils/userIds.js'
 
 /**
@@ -28,7 +29,7 @@ export function shouldHide (tabName, postInfo, config) {
 
   const hiddenUserId = findMatchingUserId(
     getUserIdCandidates(postInfo),
-    config.hiddenUserIds
+    configIndexes.hiddenUserIds
   )
   if (hiddenUserId) {
     return `hidden-user (${hiddenUserId})`
