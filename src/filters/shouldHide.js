@@ -1,3 +1,5 @@
+import { findMatchingUserId, getUserIdCandidates } from '../utils/userIds.js'
+
 /**
  * 大文字小文字を無視して部分一致比較できる文字列へ正規化する。
  * 入力: 比較対象の文字列
@@ -24,8 +26,12 @@ export function shouldHide (tabName, postInfo, config) {
     return `media-filter (list: ${tabName})`
   }
 
-  if (postInfo.userId && config.hiddenUserIds.includes(postInfo.userId)) {
-    return `hidden-user (@${postInfo.userId})`
+  const hiddenUserId = findMatchingUserId(
+    getUserIdCandidates(postInfo),
+    config.hiddenUserIds
+  )
+  if (hiddenUserId) {
+    return `hidden-user (${hiddenUserId})`
   }
 
   if (

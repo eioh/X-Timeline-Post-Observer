@@ -1,15 +1,16 @@
 import { config } from '../state/configStore.js'
+import { normalizeUserId } from '../utils/userIds.js'
 
 const PAGE_SIZE = 500
 const CUSTOM_TAB_PREFIX = 'custom:'
 const DEFAULT_CUSTOM_CATEGORY_COLOR = '#f5c542'
 const TAB_DEFINITIONS = [
-  { key: 'users',    label: 'ユーザー',   placeholder: '[@]user_id',    category: 'hide' },
+  { key: 'users',    label: 'ユーザー',   placeholder: '[@]user_id / internal_id', category: 'hide' },
   { key: 'statuses', label: 'ポスト',     placeholder: 'post_id / URL', category: 'hide' },
   { key: 'words',    label: 'キーワード', placeholder: 'keyword',       category: 'hide' },
   { key: 'media',    label: 'メディア',   placeholder: 'リスト名',      category: 'hide' },
-  { key: 'follow',   label: 'フォロー',   placeholder: '[@]user_id',    category: 'color' },
-  { key: 'list',     label: 'リスト',     placeholder: '[@]user_id',    category: 'color' },
+  { key: 'follow',   label: 'フォロー',   placeholder: '[@]user_id / internal_id', category: 'color' },
+  { key: 'list',     label: 'リスト',     placeholder: '[@]user_id / internal_id', category: 'color' },
   { key: 'settings', label: '基本',       placeholder: '',              category: 'settings' },
   { key: 'categorySettings', label: '分類', placeholder: '',             category: 'settings' }
 ]
@@ -73,7 +74,7 @@ function getAllTabDefinitions () {
     ...config.customUserCategories.map(category => ({
       key: getCustomCategoryTabKey(category.id),
       label: category.label,
-      placeholder: '[@]user_id',
+      placeholder: '[@]user_id / internal_id',
       category: 'color',
       customCategoryId: category.id
     }))
@@ -924,7 +925,7 @@ export function createSettingsDialog ({
           }
           reapplyFilters()
         },
-        normalizeInput: value => value.replace(/^@/, '')
+        normalizeInput: value => normalizeUserId(value)
       }
     }
 
@@ -942,7 +943,7 @@ export function createSettingsDialog ({
           }
           reapplyFilters()
         },
-        normalizeInput: value => value.replace(/^@/, '')
+        normalizeInput: value => normalizeUserId(value)
       }
     }
 
@@ -960,7 +961,7 @@ export function createSettingsDialog ({
           }
           reapplyFilters()
         },
-        normalizeInput: value => value.replace(/^@/, '')
+        normalizeInput: value => normalizeUserId(value)
       }
     }
 
@@ -980,7 +981,7 @@ export function createSettingsDialog ({
           }
           reapplyFilters()
         },
-        normalizeInput: value => value.replace(/^@/, '')
+        normalizeInput: value => normalizeUserId(value)
       }
     }
 

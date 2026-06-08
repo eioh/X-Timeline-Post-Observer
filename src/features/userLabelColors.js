@@ -1,3 +1,5 @@
+import { findMatchingUserId, getUserIdCandidates } from '../utils/userIds.js'
+
 const FOLLOW_LABEL_CLASS = 'xtlo-user-label-follow'
 const LIST_LABEL_CLASS = 'xtlo-user-label-list'
 const CUSTOM_LABEL_CLASS = 'xtlo-user-label-custom'
@@ -35,25 +37,26 @@ export function applyUserLabelStyles () {
 
 /**
  * 設定から対象ユーザーの色分類を返す。
- * 入力: ユーザー ID、現在設定
+ * 入力: ユーザー ID 候補、現在設定
  * 出力: 分類種別と色。該当しない場合は null。
  * 主な処理内容:
- * 1. フォロー分類、リスト分類、ユーザー定義分類の順に判定する
- * 2. ユーザー定義分類は設定色を使い、未設定時だけ登録順の既定色へ戻す
+ * 1. スクリーン名と内部数字 ID の候補を同列に扱う
+ * 2. フォロー分類、リスト分類、ユーザー定義分類の順に判定する
+ * 3. ユーザー定義分類は設定色を使い、未設定時だけ登録順の既定色へ戻す
  */
-function getUserLabelType (userId, config) {
-  if (!userId) return null
+function getUserLabelType (userIdCandidates, config) {
+  if (userIdCandidates.length === 0) return null
 
-  if (config.followUserIds.includes(userId)) {
+  if (findMatchingUserId(userIdCandidates, config.followUserIds)) {
     return { type: 'follow' }
   }
 
-  if (config.listUserIds.includes(userId)) {
+  if (findMatchingUserId(userIdCandidates, config.listUserIds)) {
     return { type: 'list' }
   }
 
   const customCategoryIndex = config.customUserCategories.findIndex(category =>
-    category.userIds.includes(userId)
+    findMatchingUserId(userIdCandidates, category.userIds)
   )
   if (customCategoryIndex >= 0) {
     const customCategory = config.customUserCategories[customCategoryIndex]
@@ -171,13 +174,13 @@ export function applyUserLabelsToArticle (article, postInfo, config) {
     clearUserLabelClasses(quoteContainer)
   }
 
-  const mainLabelType = getUserLabelType(postInfo.userId, config)
+  const mainLabelType = getUserLabelType(getUserIdCandidates(postInfo), config)
   applyLabelToUserInContainer(article, postInfo.userId, mainLabelType)
 
   if (!quoteContainer || !postInfo.quote?.userId) {
     return
   }
 
-  const quoteLabelType = getUserLabelType(postInfo.quote.userId, config)
+  const quoteLabelType = getUserLabelType(getUserIdCandidates(postInfo.quote), config)
   applyLabelToUserInContainer(quoteContainer, postInfo.quote.userId, quoteLabelType)
 }

@@ -1,4 +1,5 @@
 import { EXPIRE_MS, STORAGE_KEYS } from '../constants.js'
+import { normalizeUserId } from '../utils/userIds.js'
 
 const DEFAULT_CUSTOM_CATEGORY_COLOR = '#f5c542'
 
@@ -149,19 +150,6 @@ export async function removeMediaFilterList (listName) {
   await saveKey('mediaFilterLists')
   console.log(`[X-Observer] メディアフィルタリスト削除: "${listName}"`)
 }
-
-/**
- * ユーザー ID を保存用の書式へ正規化する。
- * 入力: @ の有無どちらでもよいユーザー ID。
- * 出力: 先頭の @ を除去したユーザー ID。
- * 主な処理内容:
- * 1. 手入力と自動取得で形式を揃える
- * 2. 末尾空白も除去して重複判定を安定させる
- */
-function normalizeUserId (userId) {
-  return userId.trim().replace(/^@/, '')
-}
-
 
 /**
  * 分類色を保存用の HEX カラーへ正規化する。

@@ -81,6 +81,7 @@ Tampermonkey メニューから `設定ダイアログを開く` を選ぶと、
 
 ```js
 XObserver.addHiddenUser('@example')
+XObserver.addHiddenUser('2006652807877931008')
 XObserver.addFollowUser('@example')
 XObserver.addListUser('@example')
 XObserver.addCustomUserCategory('分類名', '#f5c542')
@@ -99,7 +100,7 @@ XObserver.toggleAutoRefresh()
 ## 設定仕様
 
 - 非表示ポスト ID は 30 日で期限切れになります
-- ユーザー ID は保存時に先頭の `@` を除去して正規化します
+- ユーザー ID は保存時に先頭の `@` を除去して正規化します。数字だけの内部 ID も同じユーザー ID 設定として扱います
 - ユーザー色分けの自動学習は `https://x.com/home` のホームタイムラインでのみ行います
 - `フォロー中` タブの通常投稿はフォローユーザーとして自動記録します
 - `おすすめ` 以外かつ `フォロー中` 以外のタブの通常投稿はリストインユーザーとして自動記録します

@@ -57,7 +57,7 @@ export function registerMenuCommands ({
 
   GM_registerMenuCommand('非表示ユーザーIDを追加', async () => {
     const userId = normalizePromptInput(
-      prompt('非表示にしたいユーザー ID を入力してください。@ あり/なしどちらでも構いません')
+      prompt('非表示にしたいユーザー ID を入力してください。@ あり/なし、または数字の内部 ID でも構いません')
     )
     if (!userId) {
       console.log('[X-Observer] 空のユーザー ID 入力はキャンセルしました')
@@ -70,7 +70,7 @@ export function registerMenuCommands ({
 
   GM_registerMenuCommand('フォローユーザーIDを追加', async () => {
     const userId = normalizePromptInput(
-      prompt('フォローとして記録したいユーザー ID を入力してください。@ あり/なしどちらでも構いません')
+      prompt('フォローとして記録したいユーザー ID を入力してください。@ あり/なし、または数字の内部 ID でも構いません')
     )
     if (!userId) {
       console.log('[X-Observer] 空のフォローユーザー ID 入力はキャンセルしました')
@@ -83,7 +83,7 @@ export function registerMenuCommands ({
 
   GM_registerMenuCommand('リストインユーザーIDを追加', async () => {
     const userId = normalizePromptInput(
-      prompt('リストインとして記録したいユーザー ID を入力してください。@ あり/なしどちらでも構いません')
+      prompt('リストインとして記録したいユーザー ID を入力してください。@ あり/なし、または数字の内部 ID でも構いません')
     )
     if (!userId) {
       console.log('[X-Observer] 空のリストインユーザー ID 入力はキャンセルしました')

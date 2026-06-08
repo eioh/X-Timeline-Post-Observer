@@ -1,4 +1,5 @@
 import { EXPORT_VERSION } from '../constants.js'
+import { normalizeUserId } from '../utils/userIds.js'
 import { config, loadConfig, replaceConfig } from './configStore.js'
 
 /**
@@ -127,7 +128,7 @@ export function normalizeImportedConfig (raw) {
         ...new Set(
           category.userIds
             .filter(item => typeof item === 'string')
-            .map(item => item.replace(/^@/, ''))
+            .map(item => normalizeUserId(item))
             .filter(Boolean)
         )
       ]
@@ -150,21 +151,24 @@ export function normalizeImportedConfig (raw) {
       ...new Set(
         hiddenUserIds
           .filter(item => typeof item === 'string')
-          .map(item => item.replace(/^@/, ''))
+          .map(item => normalizeUserId(item))
+          .filter(Boolean)
       )
     ],
     followUserIds: [
       ...new Set(
         followUserIds
           .filter(item => typeof item === 'string')
-          .map(item => item.replace(/^@/, ''))
+          .map(item => normalizeUserId(item))
+          .filter(Boolean)
       )
     ],
     listUserIds: [
       ...new Set(
         listUserIds
           .filter(item => typeof item === 'string')
-          .map(item => item.replace(/^@/, ''))
+          .map(item => normalizeUserId(item))
+          .filter(Boolean)
       )
     ],
     customUserCategories: normalizedCustomUserCategories.filter(

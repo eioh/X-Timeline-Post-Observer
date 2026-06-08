@@ -211,6 +211,155 @@
   }
 
   /**
+   * 数字だけのユーザー内部 ID として使える文字列を返す。
+   * 入力: 任意の値。
+   * 出力: 数字文字列。該当しない場合は null。
+   * 主な処理内容: X の User.rest_id / legacy.id_str 由来の値だけを候補にする
+   */
+  function normalizeInternalUserId (value) {
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      return null
+    }
+
+    const normalized = String(value).trim();
+    return /^\d+$/.test(normalized) ? normalized : null
+  }
+
+  /**
+   * React の値が対象スクリーン名の User オブジェクトなら内部 ID を返す。
+   * 入力: React props 内の任意オブジェクト、画面表示のユーザー ID。
+   * 出力: ユーザー内部 ID。取れない場合は null。
+   * 主な処理内容:
+   * 1. User 型または screen_name を持つ構造だけを対象にする
+   * 2. 投稿 ID など別種の数字を拾わないようスクリーン名一致を確認する
+   */
+  function getInternalUserIdFromUserObject (value, expectedUserId) {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const screenName = value.legacy?.screen_name || value.screen_name || value.screenName;
+    const isUserLike =
+      value.__typename === 'User' ||
+      value.typename === 'User' ||
+      typeof screenName === 'string';
+    const normalizedScreenName = typeof screenName === 'string'
+      ? screenName.toLowerCase()
+      : null;
+    const normalizedExpected = expectedUserId
+      ? expectedUserId.toLowerCase()
+      : null;
+
+    if (
+      !isUserLike ||
+      (normalizedExpected && normalizedScreenName !== normalizedExpected)
+    ) {
+      return null
+    }
+
+    return (
+      normalizeInternalUserId(value.rest_id) ||
+      normalizeInternalUserId(value.id_str) ||
+      normalizeInternalUserId(value.legacy?.id_str)
+    )
+  }
+
+  /**
+   * React props / Fiber の中から対象ユーザーの内部 ID を探す。
+   * 入力: 探索対象の値、画面表示のユーザー ID、探索状態。
+   * 出力: ユーザー内部 ID。取れない場合は null。
+   * 主な処理内容:
+   * 1. 循環参照を避けながら浅めに再帰探索する
+   * 2. User オブジェクトと判定できる箇所だけから数字 ID を抜き出す
+   */
+  function findInternalUserIdInReactValue (
+    value,
+    expectedUserId,
+    depth = 0,
+    seen = new WeakSet()
+  ) {
+    if (!value || typeof value !== 'object' || depth > 8) {
+      return null
+    }
+
+    if (seen.has(value)) {
+      return null
+    }
+    seen.add(value);
+
+    const directUserId = getInternalUserIdFromUserObject(value, expectedUserId);
+    if (directUserId) {
+      return directUserId
+    }
+
+    for (const [key, childValue] of Object.entries(value)) {
+      if (key === 'stateNode' || key === 'return' || key === 'child' || key === 'sibling') {
+        continue
+      }
+
+      const found = findInternalUserIdInReactValue(
+        childValue,
+        expectedUserId,
+        depth + 1,
+        seen
+      );
+      if (found) {
+        return found
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * DOM 要素に紐づく React データから対象ユーザーの内部 ID を取得する。
+   * 入力: DOM 要素、画面表示のユーザー ID。
+   * 出力: ユーザー内部 ID。取れない場合は null。
+   * 主な処理内容:
+   * 1. React props / Fiber の隠しキーを探す
+   * 2. props と memoizedProps から対象ユーザーの User オブジェクトを探索する
+   * 3. Fiber の親方向にも候補データが載るため、return チェーンを浅く確認する
+   */
+  function getUserInternalIdFromReactData (element, userId) {
+    if (!element || !userId) {
+      return null
+    }
+
+    const reactKeys = Object.keys(element).filter(key =>
+      key.startsWith('__reactProps$') || key.startsWith('__reactFiber$')
+    );
+
+    for (const key of reactKeys) {
+      const reactValue = element[key];
+      const found =
+        findInternalUserIdInReactValue(reactValue?.memoizedProps, userId) ||
+        findInternalUserIdInReactValue(reactValue?.pendingProps, userId) ||
+        findInternalUserIdInReactValue(reactValue, userId);
+
+      if (found) {
+        return found
+      }
+
+      if (key.startsWith('__reactFiber$')) {
+        let fiber = reactValue?.return;
+        for (let i = 0; i < 20 && fiber; i++) {
+          const foundInParent =
+            findInternalUserIdInReactValue(fiber.memoizedProps, userId) ||
+            findInternalUserIdInReactValue(fiber.pendingProps, userId);
+
+          if (foundInParent) {
+            return foundInParent
+          }
+
+          fiber = fiber.return;
+        }
+      }
+    }
+
+    return null
+  }
+
+  /**
    * 引用カードの React Fiber から引用先 statusId を探す。
    * 入力: 引用カード相当の DOM 要素
    * 出力: 引用先 statusId。取れない場合は null
@@ -305,6 +454,9 @@
     const userId = avatarEl
       ? avatarEl.getAttribute('data-testid').replace('UserAvatar-Container-', '')
       : null;
+    const userInternalId =
+      getUserInternalIdFromReactData(avatarEl, userId) ||
+      getUserInternalIdFromReactData(quoteDivElement, userId);
 
     const tweetTextEl = quoteDivElement.querySelector('[data-testid="tweetText"]');
     const text = tweetTextEl ? getFullVisibleText(tweetTextEl).trim() : '';
@@ -323,6 +475,7 @@
     return {
       statusId: statusId || null,
       userId,
+      userInternalId,
       text,
       hasImages,
       hasVideos,
@@ -385,6 +538,9 @@
     const userId = avatarEl
       ? avatarEl.getAttribute('data-testid').replace('UserAvatar-Container-', '')
       : null;
+    const userInternalId =
+      getUserInternalIdFromReactData(avatarEl, userId) ||
+      getUserInternalIdFromReactData(article, userId);
 
     const tweetTextEl = article.querySelector('[data-testid="tweetText"]');
     const text = tweetTextEl ? getFullVisibleText(tweetTextEl).trim() : '';
@@ -413,6 +569,7 @@
     return {
       statusId,
       userId,
+      userInternalId,
       text,
       isRepost,
       repostedBy,
@@ -421,6 +578,54 @@
       hasMedia: hasImages || hasVideos,
       quote
     }
+  }
+
+  /**
+   * ユーザー ID を保存用の書式へ正規化する。
+   * 入力: @ の有無どちらでもよいユーザー ID。
+   * 出力: 先頭の @ を除去したユーザー ID。
+   * 主な処理内容:
+   * 1. 手入力と自動取得で形式を揃える
+   * 2. 数字だけの内部 ID も文字列として同じ配列へ保存できるようにする
+   */
+  function normalizeUserId (userId) {
+    return String(userId || '').trim().replace(/^@+/, '')
+  }
+
+  /**
+   * 投稿情報からユーザー判定に使う ID 候補を返す。
+   * 入力: 抽出済み投稿情報または引用投稿情報。
+   * 出力: 重複を除いたユーザー ID 候補配列。
+   * 主な処理内容:
+   * 1. 画面表示の @userId と内部数字 ID を同列の候補にする
+   * 2. 空値と重複を取り除く
+   */
+  function getUserIdCandidates (postInfo) {
+    return [
+      ...new Set(
+        [postInfo?.userId, postInfo?.userInternalId]
+          .map(userId => normalizeUserId(userId))
+          .filter(Boolean)
+      )
+    ]
+  }
+
+  /**
+   * ユーザー ID 候補のいずれかが設定リストに含まれるか判定する。
+   * 入力: ユーザー ID 候補配列、設定済みユーザー ID 配列。
+   * 出力: 一致したユーザー ID。無ければ null。
+   * 主な処理内容:
+   * 1. 登録値も比較用に正規化する
+   * 2. スクリーン名と内部数字 ID のどちらでも一致できるようにする
+   */
+  function findMatchingUserId (candidates, registeredUserIds) {
+    const normalizedRegistered = new Set(
+      registeredUserIds
+        .map(userId => normalizeUserId(userId))
+        .filter(Boolean)
+    );
+
+    return candidates.find(userId => normalizedRegistered.has(userId)) ?? null
   }
 
   const FOLLOW_LABEL_CLASS = 'xtlo-user-label-follow';
@@ -460,25 +665,26 @@
 
   /**
    * 設定から対象ユーザーの色分類を返す。
-   * 入力: ユーザー ID、現在設定
+   * 入力: ユーザー ID 候補、現在設定
    * 出力: 分類種別と色。該当しない場合は null。
    * 主な処理内容:
-   * 1. フォロー分類、リスト分類、ユーザー定義分類の順に判定する
-   * 2. ユーザー定義分類は設定色を使い、未設定時だけ登録順の既定色へ戻す
+   * 1. スクリーン名と内部数字 ID の候補を同列に扱う
+   * 2. フォロー分類、リスト分類、ユーザー定義分類の順に判定する
+   * 3. ユーザー定義分類は設定色を使い、未設定時だけ登録順の既定色へ戻す
    */
-  function getUserLabelType (userId, config) {
-    if (!userId) return null
+  function getUserLabelType (userIdCandidates, config) {
+    if (userIdCandidates.length === 0) return null
 
-    if (config.followUserIds.includes(userId)) {
+    if (findMatchingUserId(userIdCandidates, config.followUserIds)) {
       return { type: 'follow' }
     }
 
-    if (config.listUserIds.includes(userId)) {
+    if (findMatchingUserId(userIdCandidates, config.listUserIds)) {
       return { type: 'list' }
     }
 
     const customCategoryIndex = config.customUserCategories.findIndex(category =>
-      category.userIds.includes(userId)
+      findMatchingUserId(userIdCandidates, category.userIds)
     );
     if (customCategoryIndex >= 0) {
       const customCategory = config.customUserCategories[customCategoryIndex];
@@ -596,14 +802,14 @@
       clearUserLabelClasses(quoteContainer);
     }
 
-    const mainLabelType = getUserLabelType(postInfo.userId, config);
+    const mainLabelType = getUserLabelType(getUserIdCandidates(postInfo), config);
     applyLabelToUserInContainer(article, postInfo.userId, mainLabelType);
 
     if (!quoteContainer || !postInfo.quote?.userId) {
       return
     }
 
-    const quoteLabelType = getUserLabelType(postInfo.quote.userId, config);
+    const quoteLabelType = getUserLabelType(getUserIdCandidates(postInfo.quote), config);
     applyLabelToUserInContainer(quoteContainer, postInfo.quote.userId, quoteLabelType);
   }
 
@@ -633,8 +839,12 @@
       return `media-filter (list: ${tabName})`
     }
 
-    if (postInfo.userId && config.hiddenUserIds.includes(postInfo.userId)) {
-      return `hidden-user (@${postInfo.userId})`
+    const hiddenUserId = findMatchingUserId(
+      getUserIdCandidates(postInfo),
+      config.hiddenUserIds
+    );
+    if (hiddenUserId) {
+      return `hidden-user (${hiddenUserId})`
     }
 
     if (
@@ -807,19 +1017,6 @@
     await saveKey('mediaFilterLists');
     console.log(`[X-Observer] メディアフィルタリスト削除: "${listName}"`);
   }
-
-  /**
-   * ユーザー ID を保存用の書式へ正規化する。
-   * 入力: @ の有無どちらでもよいユーザー ID。
-   * 出力: 先頭の @ を除去したユーザー ID。
-   * 主な処理内容:
-   * 1. 手入力と自動取得で形式を揃える
-   * 2. 末尾空白も除去して重複判定を安定させる
-   */
-  function normalizeUserId (userId) {
-    return userId.trim().replace(/^@/, '')
-  }
-
 
   /**
    * 分類色を保存用の HEX カラーへ正規化する。
@@ -1775,12 +1972,12 @@
   const CUSTOM_TAB_PREFIX = 'custom:';
   const DEFAULT_CUSTOM_CATEGORY_COLOR = '#f5c542';
   const TAB_DEFINITIONS = [
-    { key: 'users',    label: 'ユーザー',   placeholder: '[@]user_id',    category: 'hide' },
+    { key: 'users',    label: 'ユーザー',   placeholder: '[@]user_id / internal_id', category: 'hide' },
     { key: 'statuses', label: 'ポスト',     placeholder: 'post_id / URL', category: 'hide' },
     { key: 'words',    label: 'キーワード', placeholder: 'keyword',       category: 'hide' },
     { key: 'media',    label: 'メディア',   placeholder: 'リスト名',      category: 'hide' },
-    { key: 'follow',   label: 'フォロー',   placeholder: '[@]user_id',    category: 'color' },
-    { key: 'list',     label: 'リスト',     placeholder: '[@]user_id',    category: 'color' },
+    { key: 'follow',   label: 'フォロー',   placeholder: '[@]user_id / internal_id', category: 'color' },
+    { key: 'list',     label: 'リスト',     placeholder: '[@]user_id / internal_id', category: 'color' },
     { key: 'settings', label: '基本',       placeholder: '',              category: 'settings' },
     { key: 'categorySettings', label: '分類', placeholder: '',             category: 'settings' }
   ];
@@ -1844,7 +2041,7 @@
       ...config.customUserCategories.map(category => ({
         key: getCustomCategoryTabKey(category.id),
         label: category.label,
-        placeholder: '[@]user_id',
+        placeholder: '[@]user_id / internal_id',
         category: 'color',
         customCategoryId: category.id
       }))
@@ -2695,7 +2892,7 @@
             }
             reapplyFilters();
           },
-          normalizeInput: value => value.replace(/^@/, '')
+          normalizeInput: value => normalizeUserId(value)
         }
       }
 
@@ -2713,7 +2910,7 @@
             }
             reapplyFilters();
           },
-          normalizeInput: value => value.replace(/^@/, '')
+          normalizeInput: value => normalizeUserId(value)
         }
       }
 
@@ -2731,7 +2928,7 @@
             }
             reapplyFilters();
           },
-          normalizeInput: value => value.replace(/^@/, '')
+          normalizeInput: value => normalizeUserId(value)
         }
       }
 
@@ -2751,7 +2948,7 @@
             }
             reapplyFilters();
           },
-          normalizeInput: value => value.replace(/^@/, '')
+          normalizeInput: value => normalizeUserId(value)
         }
       }
 
@@ -3692,7 +3889,7 @@
 
     GM_registerMenuCommand('非表示ユーザーIDを追加', async () => {
       const userId = normalizePromptInput(
-        prompt('非表示にしたいユーザー ID を入力してください。@ あり/なしどちらでも構いません')
+        prompt('非表示にしたいユーザー ID を入力してください。@ あり/なし、または数字の内部 ID でも構いません')
       );
       if (!userId) {
         console.log('[X-Observer] 空のユーザー ID 入力はキャンセルしました');
@@ -3705,7 +3902,7 @@
 
     GM_registerMenuCommand('フォローユーザーIDを追加', async () => {
       const userId = normalizePromptInput(
-        prompt('フォローとして記録したいユーザー ID を入力してください。@ あり/なしどちらでも構いません')
+        prompt('フォローとして記録したいユーザー ID を入力してください。@ あり/なし、または数字の内部 ID でも構いません')
       );
       if (!userId) {
         console.log('[X-Observer] 空のフォローユーザー ID 入力はキャンセルしました');
@@ -3718,7 +3915,7 @@
 
     GM_registerMenuCommand('リストインユーザーIDを追加', async () => {
       const userId = normalizePromptInput(
-        prompt('リストインとして記録したいユーザー ID を入力してください。@ あり/なしどちらでも構いません')
+        prompt('リストインとして記録したいユーザー ID を入力してください。@ あり/なし、または数字の内部 ID でも構いません')
       );
       if (!userId) {
         console.log('[X-Observer] 空のリストインユーザー ID 入力はキャンセルしました');
@@ -3896,7 +4093,7 @@
           ...new Set(
             category.userIds
               .filter(item => typeof item === 'string')
-              .map(item => item.replace(/^@/, ''))
+              .map(item => normalizeUserId(item))
               .filter(Boolean)
           )
         ]
@@ -3919,21 +4116,24 @@
         ...new Set(
           hiddenUserIds
             .filter(item => typeof item === 'string')
-            .map(item => item.replace(/^@/, ''))
+            .map(item => normalizeUserId(item))
+            .filter(Boolean)
         )
       ],
       followUserIds: [
         ...new Set(
           followUserIds
             .filter(item => typeof item === 'string')
-            .map(item => item.replace(/^@/, ''))
+            .map(item => normalizeUserId(item))
+            .filter(Boolean)
         )
       ],
       listUserIds: [
         ...new Set(
           listUserIds
             .filter(item => typeof item === 'string')
-            .map(item => item.replace(/^@/, ''))
+            .map(item => normalizeUserId(item))
+            .filter(Boolean)
         )
       ],
       customUserCategories: normalizedCustomUserCategories.filter(
