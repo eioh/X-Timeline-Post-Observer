@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         X Timeline Post Observer
 // @namespace    http://tampermonkey.net/
-// @version      1.3
-// @description  MutationObserverで新着ポストを監視し、フィルタリングする
+// @version      1.4
+// @description  安全モードでユーザー分類色と設定管理のみを行う
 // @match        https://x.com/*
 // @match        https://twitter.com/*
 // @grant        GM_getValues
@@ -27,8 +27,6 @@
 
   // DOM 上で「処理済み」と「非表示理由」を識別するための属性名。
   // CSS クラスではなく data 属性にしているのは、X 側のクラス変動と衝突しにくくするため。
-  const PROCESSED_ATTR = 'data-xtlo-processed';
-  const HIDDEN_ATTR = 'data-xtlo-hidden';
 
   // 非表示にした投稿を一定期間で自然消滅させるための期限設定。
   // 恒久データにすると、過去の一時的な非表示が残り続けて管理しづらくなる。
@@ -53,533 +51,6 @@
     autoRefreshEnabled: 'xtlo_autoRefreshEnabled'
   };
 
-  // 新着自動読込の間隔と、トップ判定に使うスクロール閾値。
-  // 厳密な 0px 判定だとわずかなズレで自動更新が止まりやすいため、少し余裕を持たせている。
-  const AUTO_REFRESH_INTERVAL = 10 * 1000;
-  const SCROLL_TOP_THRESHOLD = 50;
-
-  // X のヘッダーや投稿フォームを隠して閲覧領域を広げるための CSS。
-  const HIDE_UI_CSS = `
-  header[role="banner"] {
-    display: none !important;
-  }
-  div:has(> div[role="progressbar"]):has(> div [data-testid="tweetTextarea_0"]) {
-    display: none !important;
-  }
-`;
-
-  // タイムライン密度を上げるため、アバター列を圧縮する CSS。
-  // レイアウト変更に弱い箇所なので、値は他ファイルへ分散させずここで管理する。
-  const COMPACT_LAYOUT_CSS = `
-  article div:has(> [data-testid="Tweet-User-Avatar"]) {
-    flex-basis: 20px !important;
-    margin-right: 4px !important;
-  }
-
-  article [data-testid="Tweet-User-Avatar"],
-  article [data-testid="Tweet-User-Avatar"] div,
-  article [data-testid="Tweet-User-Avatar"] a,
-  article [data-testid="Tweet-User-Avatar"] img {
-    width: 20px !important;
-    height: 20px !important;
-    min-width: 20px !important;
-    min-height: 20px !important;
-  }
-`;
-
-  // X 標準メニューに差し込む独自メニュー項目の見た目。
-  // 注入先は X 側 DOM に依存するため、少なくともクラス名と構造の対応関係が追えるように定数化している。
-  const CUSTOM_MENU_CSS = `
-  .xtlo-hide-post-menuitem {
-    display: flex;
-    align-items: center;
-    padding: 12px 16px;
-    cursor: pointer;
-    transition: background-color 0.2s;
-  }
-  .xtlo-hide-post-menuitem:hover {
-    background-color: rgba(239, 243, 244, 0.1);
-  }
-  .xtlo-hide-post-menuitem .xtlo-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin-right: 12px;
-    width: 18.75px;
-    height: 18.75px;
-  }
-  .xtlo-hide-post-menuitem .xtlo-icon svg {
-    fill: rgb(239, 243, 244);
-    width: 18.75px;
-    height: 18.75px;
-  }
-  .xtlo-hide-post-menuitem .xtlo-label {
-    color: rgb(239, 243, 244);
-    font-family: "TwitterChirp", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    font-size: 15px;
-    line-height: 20px;
-    font-weight: 400;
-  }
-`;
-
-  /**
-   * タイムラインの DOM 変化を監視して再処理をつなぐ。
-   * 入力: scheduleProcess と handleLateMedia を持つオブジェクト
-   * 出力: MutationObserver
-   * 主な処理内容:
-   * 1. 新しい article 追加を検知する
-   * 2. 処理済み article 内の遅延メディア追加を検知する
-   * 3. 必要な再処理だけを呼び出す
-   */
-  function setupTimelineObserver ({ scheduleProcess, handleLateMedia }) {
-    const observer = new MutationObserver(mutations => {
-      let hasNewArticle = false;
-
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-          if (node.nodeType !== 1) continue
-
-          // article 追加は直接ノードだけでなく、追加 subtree 内にも現れるため querySelector で拾う。
-          if (node.querySelector && node.querySelector('article')) {
-            hasNewArticle = true;
-          }
-
-          // 画像・動画は article 本体より遅れて差し込まれるため、メディア要素追加も独立に拾う。
-          const mediaNodes = [];
-          if (
-            node.getAttribute &&
-            (node.getAttribute('data-testid') === 'tweetPhoto' ||
-              node.getAttribute('data-testid') === 'videoPlayer' ||
-              node.getAttribute('data-testid') === 'videoComponent')
-          ) {
-            mediaNodes.push(node);
-          }
-          if (node.querySelectorAll) {
-            mediaNodes.push(
-              ...node.querySelectorAll(
-                '[data-testid="tweetPhoto"], [data-testid="videoPlayer"], [data-testid="videoComponent"]'
-              )
-            );
-          }
-
-          for (const media of mediaNodes) {
-            const article = media.closest('article');
-            if (article && article.hasAttribute(PROCESSED_ATTR)) {
-              handleLateMedia(article);
-            }
-          }
-        }
-      }
-
-      if (hasNewArticle) {
-        scheduleProcess();
-      }
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-
-    return observer
-  }
-
-  /**
-   * 現在アクティブなタイムラインタブ名を返す。
-   * 入力: なし
-   * 出力: タブ名文字列。取得できない場合は null
-   * 主な処理内容: role 属性と aria-selected を使って X のタブ選択状態を読む
-   */
-  function getActiveTabName () {
-    const activeTab = document.querySelector(
-      '[role="tablist"] [role="tab"][aria-selected="true"]'
-    );
-    return activeTab ? activeTab.textContent.trim() : null
-  }
-
-  /**
-   * 現在の画面がホームタイムラインかどうかを判定する。
-   * 入力: なし
-   * 出力: ホームタイムラインなら true
-   * 主な処理内容:
-   * 1. パス名を正規化して末尾スラッシュ差を吸収する
-   * 2. /home のときだけ true を返す
-   */
-  function isHomeTimelinePage () {
-    const normalizedPath = window.location.pathname.replace(/\/+$/, '') || '/';
-    return normalizedPath === '/home'
-  }
-
-  /**
-   * 数字だけのユーザー内部 ID として使える文字列を返す。
-   * 入力: 任意の値。
-   * 出力: 数字文字列。該当しない場合は null。
-   * 主な処理内容: X の User.rest_id / legacy.id_str 由来の値だけを候補にする
-   */
-  function normalizeInternalUserId (value) {
-    if (typeof value !== 'string' && typeof value !== 'number') {
-      return null
-    }
-
-    const normalized = String(value).trim();
-    return /^\d+$/.test(normalized) ? normalized : null
-  }
-
-  /**
-   * React の値が対象スクリーン名の User オブジェクトなら内部 ID を返す。
-   * 入力: React props 内の任意オブジェクト、画面表示のユーザー ID。
-   * 出力: ユーザー内部 ID。取れない場合は null。
-   * 主な処理内容:
-   * 1. User 型または screen_name を持つ構造だけを対象にする
-   * 2. 投稿 ID など別種の数字を拾わないようスクリーン名一致を確認する
-   */
-  function getInternalUserIdFromUserObject (value, expectedUserId) {
-    if (!value || typeof value !== 'object') {
-      return null
-    }
-
-    const screenName = value.legacy?.screen_name || value.screen_name || value.screenName;
-    const isUserLike =
-      value.__typename === 'User' ||
-      value.typename === 'User' ||
-      typeof screenName === 'string';
-    const normalizedScreenName = typeof screenName === 'string'
-      ? screenName.toLowerCase()
-      : null;
-    const normalizedExpected = expectedUserId
-      ? expectedUserId.toLowerCase()
-      : null;
-
-    if (
-      !isUserLike ||
-      (normalizedExpected && normalizedScreenName !== normalizedExpected)
-    ) {
-      return null
-    }
-
-    return (
-      normalizeInternalUserId(value.rest_id) ||
-      normalizeInternalUserId(value.id_str) ||
-      normalizeInternalUserId(value.legacy?.id_str)
-    )
-  }
-
-  /**
-   * React props / Fiber の中から対象ユーザーの内部 ID を探す。
-   * 入力: 探索対象の値、画面表示のユーザー ID、探索状態。
-   * 出力: ユーザー内部 ID。取れない場合は null。
-   * 主な処理内容:
-   * 1. 循環参照を避けながら浅めに再帰探索する
-   * 2. User オブジェクトと判定できる箇所だけから数字 ID を抜き出す
-   */
-  function findInternalUserIdInReactValue (
-    value,
-    expectedUserId,
-    depth = 0,
-    seen = new WeakSet()
-  ) {
-    if (!value || typeof value !== 'object' || depth > 8) {
-      return null
-    }
-
-    if (seen.has(value)) {
-      return null
-    }
-    seen.add(value);
-
-    const directUserId = getInternalUserIdFromUserObject(value, expectedUserId);
-    if (directUserId) {
-      return directUserId
-    }
-
-    for (const [key, childValue] of Object.entries(value)) {
-      if (key === 'stateNode' || key === 'return' || key === 'child' || key === 'sibling') {
-        continue
-      }
-
-      const found = findInternalUserIdInReactValue(
-        childValue,
-        expectedUserId,
-        depth + 1,
-        seen
-      );
-      if (found) {
-        return found
-      }
-    }
-
-    return null
-  }
-
-  /**
-   * DOM 要素に紐づく React データから対象ユーザーの内部 ID を取得する。
-   * 入力: DOM 要素、画面表示のユーザー ID。
-   * 出力: ユーザー内部 ID。取れない場合は null。
-   * 主な処理内容:
-   * 1. React props / Fiber の隠しキーを探す
-   * 2. props と memoizedProps から対象ユーザーの User オブジェクトを探索する
-   * 3. Fiber の親方向にも候補データが載るため、return チェーンを浅く確認する
-   */
-  function getUserInternalIdFromReactData (element, userId) {
-    if (!element || !userId) {
-      return null
-    }
-
-    const reactKeys = Object.keys(element).filter(key =>
-      key.startsWith('__reactProps$') || key.startsWith('__reactFiber$')
-    );
-
-    for (const key of reactKeys) {
-      const reactValue = element[key];
-      const found =
-        findInternalUserIdInReactValue(reactValue?.memoizedProps, userId) ||
-        findInternalUserIdInReactValue(reactValue?.pendingProps, userId) ||
-        findInternalUserIdInReactValue(reactValue, userId);
-
-      if (found) {
-        return found
-      }
-
-      if (key.startsWith('__reactFiber$')) {
-        let fiber = reactValue?.return;
-        for (let i = 0; i < 20 && fiber; i++) {
-          const foundInParent =
-            findInternalUserIdInReactValue(fiber.memoizedProps, userId) ||
-            findInternalUserIdInReactValue(fiber.pendingProps, userId);
-
-          if (foundInParent) {
-            return foundInParent
-          }
-
-          fiber = fiber.return;
-        }
-      }
-    }
-
-    return null
-  }
-
-  /**
-   * 引用カードの React Fiber から引用先 statusId を探す。
-   * 入力: 引用カード相当の DOM 要素
-   * 出力: 引用先 statusId。取れない場合は null
-   * 主な処理内容: Fiber を親方向へたどり、link.pathname から /status/<数字> を抜き出す
-   */
-  function getQuoteStatusIdFromFiber (quoteDivElement) {
-    const fiberKey = Object.keys(quoteDivElement).find(key =>
-      key.startsWith('__reactFiber$')
-    );
-    if (!fiberKey) return null
-
-    let fiber = quoteDivElement[fiberKey];
-    for (let i = 0; i < 15 && fiber; i++) {
-      const props = fiber.memoizedProps || {};
-      if (props.link && typeof props.link === 'object' && props.link.pathname) {
-        const match = props.link.pathname.match(/\/status\/(\d+)/);
-        if (match) return match[1]
-      }
-      fiber = fiber.return;
-    }
-
-    return null
-  }
-
-  /**
-   * DOM 内リンクから引用先 statusId を探す。
-   * 入力: 元 article 要素、引用ユーザー ID
-   * 出力: 引用先 statusId。取れない場合は null
-   * 主な処理内容: 該当ユーザーの /status/ リンクを総当たりで探す
-   */
-  function getQuoteStatusIdFromDOM (article, quoteUserId) {
-    if (!quoteUserId) return null
-
-    const links = article.querySelectorAll('a[href*="/status/"]');
-    for (const link of links) {
-      const href = link.getAttribute('href');
-      if (href.includes('/' + quoteUserId + '/status/')) {
-        const match = href.match(/\/status\/(\d+)/);
-        if (match) return match[1]
-      }
-    }
-
-    return null
-  }
-
-  /**
-   * tweetText 要素から、画面表示に近い本文文字列を再構築する。
-   * 入力: tweetText 要素
-   * 出力: 復元した本文文字列
-   * 主な処理内容:
-   * 1. TextNode をそのまま連結する
-   * 2. 絵文字画像は alt 属性で復元する
-   * 3. 外部URLは title 属性を優先して展開先 URL を採用する
-   */
-  function getFullVisibleText (element) {
-    let text = '';
-
-    for (const node of element.childNodes) {
-      if (node.nodeType === Node.TEXT_NODE) {
-        text += node.textContent;
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
-        if (node.tagName === 'IMG') {
-          text += node.getAttribute('alt') || '';
-        } else if (node.tagName === 'A') {
-          const href = node.getAttribute('href') || '';
-          const title = node.getAttribute('title');
-          if (title && href.startsWith('http')) {
-            // t.co 短縮リンクをそのまま判定するとワードフィルタが外れるため、展開先URLを採用する。
-            text += title;
-          } else {
-            text += getFullVisibleText(node);
-          }
-        } else {
-          text += getFullVisibleText(node);
-        }
-      }
-    }
-
-    return text
-  }
-
-  /**
-   * 引用投稿部分の情報を抽出する。
-   * 入力: 親 article 要素、引用カード要素
-   * 出力: 引用投稿の userId / statusId / 本文 / メディア有無
-   * 主な処理内容: 引用カード内の本文・アバター・メディアと、引用先 ID をまとめて読む
-   */
-  function extractQuoteInfo (article, quoteDivElement) {
-    const avatarEl = quoteDivElement.querySelector(
-      '[data-testid^="UserAvatar-Container-"]'
-    );
-    const userId = avatarEl
-      ? avatarEl.getAttribute('data-testid').replace('UserAvatar-Container-', '')
-      : null;
-    const userInternalId =
-      getUserInternalIdFromReactData(avatarEl, userId) ||
-      getUserInternalIdFromReactData(quoteDivElement, userId);
-
-    const tweetTextEl = quoteDivElement.querySelector('[data-testid="tweetText"]');
-    const text = tweetTextEl ? getFullVisibleText(tweetTextEl).trim() : '';
-
-    const hasImages =
-      quoteDivElement.querySelectorAll('[data-testid="tweetPhoto"]').length > 0;
-    const hasVideos =
-      quoteDivElement.querySelectorAll(
-        '[data-testid="videoPlayer"], [data-testid="videoComponent"]'
-      ).length > 0;
-
-    const statusId =
-      getQuoteStatusIdFromFiber(quoteDivElement) ||
-      getQuoteStatusIdFromDOM(article, userId);
-
-    return {
-      statusId: statusId || null,
-      userId,
-      userInternalId,
-      text,
-      hasImages,
-      hasVideos,
-      hasMedia: hasImages || hasVideos
-    }
-  }
-
-  /**
-   * リポスト文脈の有無と、リポストしたユーザー ID を抽出する。
-   * 入力: 親 article 要素
-   * 出力: isRepost と repostedBy を持つオブジェクト
-   * 主な処理内容: socialContext の親リンクから /<screen_name> 形式のプロフィールパスだけを採用する
-   */
-  function extractRepostInfo (article) {
-    const socialContextEl = article.querySelector('[data-testid="socialContext"]');
-    if (!socialContextEl) {
-      return {
-        isRepost: false,
-        repostedBy: null
-      }
-    }
-
-    const repostLink = socialContextEl.closest('a[href^="/"]');
-    if (!repostLink) {
-      return {
-        isRepost: true,
-        repostedBy: null
-      }
-    }
-
-    const href = repostLink.getAttribute('href') || '';
-    // socialContext 近傍には投稿詳細リンクもあり得るため、プロフィール直下のパスだけを採用する。
-    const match = href.match(/^\/([^/?#]+)$/);
-
-    return {
-      isRepost: true,
-      repostedBy: match ? match[1] : null
-    }
-  }
-
-  /**
-   * タイムライン上の article から投稿情報を抽出する。
-   * 入力: article 要素
-   * 出力: statusId / userId / 本文 / リポスト情報 / メディア有無 / 引用情報を含むオブジェクト
-   * 主な処理内容:
-   * 1. 投稿 ID とユーザー ID を取る
-   * 2. 本文を見た目に近い形で復元する
-   * 3. socialContext からリポスト情報を取る
-   * 4. 引用投稿内メディアを差し引いたうえで自前メディアを判定する
-   */
-  function extractPostInfo (article) {
-    const statusLink = article.querySelector('a[href*="/status/"]');
-    let statusId = null;
-    if (statusLink) {
-      const match = statusLink.getAttribute('href').match(/\/status\/(\d+)/);
-      if (match) statusId = match[1];
-    }
-
-    const avatarEl = article.querySelector('[data-testid^="UserAvatar-Container-"]');
-    const userId = avatarEl
-      ? avatarEl.getAttribute('data-testid').replace('UserAvatar-Container-', '')
-      : null;
-    const userInternalId =
-      getUserInternalIdFromReactData(avatarEl, userId) ||
-      getUserInternalIdFromReactData(article, userId);
-
-    const tweetTextEl = article.querySelector('[data-testid="tweetText"]');
-    const text = tweetTextEl ? getFullVisibleText(tweetTextEl).trim() : '';
-    const { isRepost, repostedBy } = extractRepostInfo(article);
-
-    const quoteDivElement = article.querySelector('div[role="link"][tabindex="0"]');
-    const totalPhotos = article.querySelectorAll('[data-testid="tweetPhoto"]').length;
-    const totalVideos = article.querySelectorAll(
-      '[data-testid="videoPlayer"], [data-testid="videoComponent"]'
-    ).length;
-
-    let quotePhotos = 0;
-    let quoteVideos = 0;
-    if (quoteDivElement) {
-      quotePhotos = quoteDivElement.querySelectorAll('[data-testid="tweetPhoto"]').length;
-      quoteVideos = quoteDivElement.querySelectorAll(
-        '[data-testid="videoPlayer"], [data-testid="videoComponent"]'
-      ).length;
-    }
-
-    // 引用ポスト内メディアを差し引かないと、本文だけの引用投稿までメディア付き扱いになる。
-    const hasImages = totalPhotos - quotePhotos > 0;
-    const hasVideos = totalVideos - quoteVideos > 0;
-    const quote = quoteDivElement ? extractQuoteInfo(article, quoteDivElement) : null;
-
-    return {
-      statusId,
-      userId,
-      userInternalId,
-      text,
-      isRepost,
-      repostedBy,
-      hasImages,
-      hasVideos,
-      hasMedia: hasImages || hasVideos,
-      quote
-    }
-  }
-
   /**
    * ユーザー ID を保存用の書式へ正規化する。
    * 入力: @ の有無どちらでもよいユーザー ID。
@@ -603,24 +74,6 @@
   function isNumericUserId (userId) {
     const normalizedUserId = normalizeUserId(userId);
     return Boolean(normalizedUserId) && /^\d+$/.test(normalizedUserId)
-  }
-
-  /**
-   * 投稿情報からユーザー判定に使う ID 候補を返す。
-   * 入力: 抽出済み投稿情報または引用投稿情報。
-   * 出力: 重複を除いたユーザー ID 候補配列。
-   * 主な処理内容:
-   * 1. 画面表示の @userId と内部数字 ID を同列の候補にする
-   * 2. 空値と重複を取り除く
-   */
-  function getUserIdCandidates (postInfo) {
-    return [
-      ...new Set(
-        [postInfo?.userId, postInfo?.userInternalId]
-          .map(userId => normalizeUserId(userId))
-          .filter(Boolean)
-      )
-    ]
   }
 
   /**
@@ -724,254 +177,6 @@
     });
   }
 
-  const FOLLOW_LABEL_CLASS = 'xtlo-user-label-follow';
-  const LIST_LABEL_CLASS = 'xtlo-user-label-list';
-  const CUSTOM_LABEL_CLASS = 'xtlo-user-label-custom';
-  const CUSTOM_LABEL_COLORS = ['#f5c542', '#ff7a59', '#b17cff', '#00c2a8', '#ff6fae', '#9ad66b'];
-  const USER_LABEL_CSS = `
-  .${FOLLOW_LABEL_CLASS} {
-    color: #1d9bf0 !important;
-  }
-
-  .${LIST_LABEL_CLASS} {
-    color: #33c46a !important;
-  }
-
-  .${CUSTOM_LABEL_CLASS} {
-    color: var(--xtlo-user-label-color, #f5c542) !important;
-  }
-`;
-
-  let styleInjected = false;
-
-  /**
-   * ユーザー分類ラベル用のスタイルを一度だけ挿入する。
-   * 入力: なし
-   * 出力: なし
-   * 主な処理内容:
-   * 1. フォロー、リスト、ユーザー定義分類用の色を定義する
-   * 2. 多重挿入を防ぐ
-   */
-  function applyUserLabelStyles () {
-    if (styleInjected) return
-
-    GM_addStyle(USER_LABEL_CSS);
-    styleInjected = true;
-  }
-
-  /**
-   * 設定から対象ユーザーの色分類を返す。
-   * 入力: ユーザー ID 候補、現在設定
-   * 出力: 分類種別と色。該当しない場合は null。
-   * 主な処理内容:
-   * 1. スクリーン名と内部数字 ID の候補を同列に扱う
-   * 2. フォロー分類、リスト分類、ユーザー定義分類の順に判定する
-   * 3. ユーザー定義分類は設定色を使い、未設定時だけ登録順の既定色へ戻す
-   */
-  function getUserLabelType (userIdCandidates, config) {
-    if (userIdCandidates.length === 0) return null
-
-    if (findMatchingUserId(userIdCandidates, configIndexes.followUserIds)) {
-      return { type: 'follow' }
-    }
-
-    if (findMatchingUserId(userIdCandidates, configIndexes.listUserIds)) {
-      return { type: 'list' }
-    }
-
-    let customCategoryIndex = null;
-    for (const userId of userIdCandidates) {
-      const candidateIndex = configIndexes.customUserCategoryIndexByUserId.get(userId);
-      if (
-        candidateIndex !== undefined &&
-        (customCategoryIndex === null || candidateIndex < customCategoryIndex)
-      ) {
-        customCategoryIndex = candidateIndex;
-      }
-    }
-
-    if (customCategoryIndex !== null) {
-      const customCategory = config.customUserCategories[customCategoryIndex];
-      return {
-        type: 'custom',
-        color: customCategory.color || CUSTOM_LABEL_COLORS[customCategoryIndex % CUSTOM_LABEL_COLORS.length]
-      }
-    }
-
-    return null
-  }
-
-  /**
-   * プロフィール系リンクかどうかを userId 基準で判定する。
-   * 入力: href 文字列、対象 userId
-   * 出力: 一致時 true
-   * 主な処理内容:
-   * 1. /<userId> または /<userId>/status/... を受け入れる
-   * 2. クエリやハッシュ付きリンクも拾う
-   */
-  function isUserProfileLink (href, userId) {
-    return (
-      href === `/${userId}` ||
-      href.startsWith(`/${userId}/`) ||
-      href.startsWith(`/${userId}?`) ||
-      href.startsWith(`/${userId}#`)
-    )
-  }
-
-  /**
-   * ユーザー ID 表示用の span をリンク内から探す。
-   * 入力: プロフィールリンク要素、対象 userId
-   * 出力: マッチした span 要素、無ければ null
-   * 主な処理内容:
-   * 1. @userId と完全一致する表示だけを対象にする
-   * 2. displayName 側を誤って着色しない
-   */
-  function findUserIdSpan (link, userId) {
-    const expectedText = `@${userId}`;
-    const spans = link.querySelectorAll('span');
-
-    for (const span of spans) {
-      const text = span.textContent?.trim().replace(/\u200b/g, '');
-      if (text === expectedText) {
-        return span
-      }
-    }
-
-    return null
-  }
-
-  /**
-   * コンテナ内の既存分類クラスを除去する。
-   * 入力: article または引用カードの要素
-   * 出力: なし
-   * 主な処理内容:
-   * 1. 再適用時に古い色が残らないようクラスを外す
-   */
-  function clearUserLabelClasses (container) {
-    container
-      .querySelectorAll(`.${FOLLOW_LABEL_CLASS}, .${LIST_LABEL_CLASS}, .${CUSTOM_LABEL_CLASS}`)
-      .forEach(element => {
-        element.classList.remove(FOLLOW_LABEL_CLASS, LIST_LABEL_CLASS, CUSTOM_LABEL_CLASS);
-        element.style.removeProperty('--xtlo-user-label-color');
-      });
-  }
-
-  /**
-   * 対象コンテナ内で特定ユーザーの @userId 表示へ色分類を反映する。
-   * 入力: 描画対象コンテナ、ユーザー ID、分類情報
-   * 出力: なし
-   * 主な処理内容:
-   * 1. 対応するプロフィールリンクを探す
-   * 2. @userId 表示用 span へ分類クラスを付ける
-   */
-  function applyLabelToUserInContainer (container, userId, labelType) {
-    if (!userId || !labelType) return
-
-    const className = labelType.type === 'follow'
-      ? FOLLOW_LABEL_CLASS
-      : labelType.type === 'list'
-        ? LIST_LABEL_CLASS
-        : CUSTOM_LABEL_CLASS;
-    const links = container.querySelectorAll('a[href^="/"]');
-
-    for (const link of links) {
-      const href = link.getAttribute('href') || '';
-      if (!isUserProfileLink(href, userId)) {
-        continue
-      }
-
-      const userIdSpan = findUserIdSpan(link, userId);
-      if (userIdSpan) {
-        userIdSpan.classList.add(className);
-        if (labelType.type === 'custom') {
-          userIdSpan.style.setProperty('--xtlo-user-label-color', labelType.color);
-        }
-      }
-    }
-  }
-
-  /**
-   * 投稿内のユーザー ID 表示へ分類色を反映する。
-   * 入力: article 要素、抽出済み投稿情報、現在設定
-   * 出力: なし
-   * 主な処理内容:
-   * 1. 既存の色クラスを消してから再適用する
-   * 2. 本文側と引用側それぞれの userId を個別に着色する
-   */
-  function applyUserLabelsToArticle (article, postInfo, config) {
-    clearUserLabelClasses(article);
-
-    const quoteContainer = article.querySelector('div[role="link"][tabindex="0"]');
-    if (quoteContainer) {
-      clearUserLabelClasses(quoteContainer);
-    }
-
-    const mainLabelType = getUserLabelType(getUserIdCandidates(postInfo), config);
-    applyLabelToUserInContainer(article, postInfo.userId, mainLabelType);
-
-    if (!quoteContainer || !postInfo.quote?.userId) {
-      return
-    }
-
-    const quoteLabelType = getUserLabelType(getUserIdCandidates(postInfo.quote), config);
-    applyLabelToUserInContainer(quoteContainer, postInfo.quote.userId, quoteLabelType);
-  }
-
-  /**
-   * 大文字小文字を無視して部分一致比較できる文字列へ正規化する。
-   * 入力: 比較対象の文字列
-   * 出力: 小文字化した文字列
-   * 主な処理内容: 登録値の見た目は保持したまま、判定時だけ比較条件を揃える
-   */
-  function normalizeTextForCaseInsensitiveMatch (text) {
-    return text.toLowerCase()
-  }
-
-  /**
-   * 投稿情報と現在設定から、非表示にすべき理由を返す。
-   * 入力: タブ名、抽出済み投稿情報、現在設定
-   * 出力: 非表示理由の文字列。表示対象なら null
-   * 主な処理内容: メディアフィルタ、ユーザー、投稿 ID、キーワードの順で判定する
-   */
-  function shouldHide (tabName, postInfo, config) {
-    // リスト単位のメディアフィルタは「表示条件」であり、他の非表示条件より先に判定すると意図が追いやすい。
-    if (
-      tabName &&
-      config.mediaFilterLists.includes(tabName) &&
-      !postInfo.hasMedia
-    ) {
-      return `media-filter (list: ${tabName})`
-    }
-
-    const hiddenUserId = findMatchingUserId(
-      getUserIdCandidates(postInfo),
-      configIndexes.hiddenUserIds
-    );
-    if (hiddenUserId) {
-      return `hidden-user (${hiddenUserId})`
-    }
-
-    if (
-      postInfo.statusId &&
-      config.hiddenStatuses.some(entry => entry.statusId === postInfo.statusId)
-    ) {
-      return `hidden-status (${postInfo.statusId})`
-    }
-
-    if (postInfo.text) {
-      // 登録時の表記をそのまま残したいので、保存値は変えずに比較時だけ小文字へ揃える。
-      const normalizedPostText = normalizeTextForCaseInsensitiveMatch(postInfo.text);
-
-      for (const word of config.hiddenWords) {
-        if (normalizedPostText.includes(normalizeTextForCaseInsensitiveMatch(word))) {
-          return `hidden-word ("${word}")`
-        }
-      }
-    }
-
-    return null
-  }
-
   /**
    * 設定内容をログ向けの件数サマリへ変換する。
    * 入力: 現在の config オブジェクト。
@@ -1000,7 +205,6 @@
   }
 
   const DEFAULT_CUSTOM_CATEGORY_COLOR$1 = '#f5c542';
-  const AUTO_REPLACE_SAVE_DELAY_MS = 250;
   const PERSISTED_CONFIG_KEYS = [
     'mediaFilterLists',
     'hiddenUserIds',
@@ -1014,7 +218,6 @@
   ];
   const saveQueues = new Map();
   const saveDebounceTimers = new Map();
-  const loggedUserIdReplacements = new Set();
 
   // 現在の設定を一か所に集約して持つ。
   // オブジェクト自体を差し替えると参照先が古いまま残るため、各モジュールはこの中身を書き換える前提で共有する。
@@ -1148,28 +351,6 @@
 
     clearTimeout(timer);
     saveDebounceTimers.delete(configKey);
-  }
-
-  /**
-   * 指定キーに対応する設定を少し遅らせて保存する。
-   * 入力: config オブジェクト上のキー名。
-   * 出力: なし。
-   * 主な処理内容:
-   * 1. 短時間に複数回起きる自動置換をキー単位でまとめる
-   * 2. 実際の保存は saveKey の直列化レイヤーに委譲する
-   */
-  function scheduleSaveKey (configKey) {
-    if (!STORAGE_KEYS[configKey]) return
-
-    clearScheduledSaveKey(configKey);
-    const timer = setTimeout(() => {
-      saveDebounceTimers.delete(configKey);
-      void saveKey(configKey).catch(error => {
-        console.error(`[X-Observer] ${configKey} の遅延保存に失敗しました:`, error);
-      });
-    }, AUTO_REPLACE_SAVE_DELAY_MS);
-
-    saveDebounceTimers.set(configKey, timer);
   }
 
   /**
@@ -1461,209 +642,6 @@
   }
 
   /**
-   * 内部 ID から screen name への置換後に custom 系インデックスを更新する。
-   * 入力: 置換元の内部 ID、置換先の screen name。
-   * 出力: なし。
-   * 主な処理内容:
-   * 1. custom 分類を一度だけ走査して双方の最小分類 index を探す
-   * 2. custom Map と登録済み内部 ID Set を現在設定へ同期する
-   */
-  function refreshUserIdReplacementIndexes (internalId, screenName) {
-    const internalCategoryIndexes =
-      configIndexes.customCategoryIndexesByInternalUserId.get(internalId);
-    if (!internalCategoryIndexes || internalCategoryIndexes.size === 0) {
-      configIndexes.customUserCategoryIndexByUserId.delete(internalId);
-    } else {
-      configIndexes.customUserCategoryIndexByUserId.set(
-        internalId,
-        Math.min(...internalCategoryIndexes)
-      );
-    }
-
-    const screenNameCategoryIndex =
-      configIndexes.customUserCategoryIndexByUserId.get(screenName);
-    if (screenNameCategoryIndex !== undefined) {
-      configIndexes.customUserCategoryIndexByUserId.set(
-        screenName,
-        screenNameCategoryIndex
-      );
-    }
-
-    refreshRegisteredInternalUserId(internalId);
-  }
-
-  /**
-   * ユーザー ID 配列内の内部 ID を screen name へ置換する。
-   * 入力: ユーザー ID 配列、置換元内部 ID、置換先 screen name。
-   * 出力: 変更後の配列と変更有無。
-   * 主な処理内容:
-   * 1. 同じ配列内に screen name があれば内部 ID を削除する
-   * 2. 無ければ内部 ID を screen name へ置換する
-   */
-  function replaceUserIdInList (userIds, internalId, screenName) {
-    const hasScreenName = hasNormalizedUserId(userIds, screenName);
-    let changed = false;
-    let didInsertScreenName = hasScreenName;
-
-    const nextUserIds = userIds
-      .map(userId => {
-        if (normalizeUserId(userId) !== internalId) {
-          return userId
-        }
-
-        changed = true;
-        if (didInsertScreenName) {
-          return null
-        }
-
-        didInsertScreenName = true;
-        return screenName
-      })
-      .filter(Boolean);
-
-    return { userIds: nextUserIds, changed }
-  }
-
-  /**
-   * 単純ユーザー ID リスト内の内部 ID を screen name へ置換する。
-   * 入力: config キー、置換元内部 ID、置換先 screen name、変更 key Set。
-   * 出力: なし。
-   * 主な処理内容:
-   * 1. 保存配列を置換する
-   * 2. 対応する判定用 Set も差分更新する
-   */
-  function replaceUserIdInConfigList (configKey, internalId, screenName, changedKeys) {
-    const result = replaceUserIdInList(config[configKey], internalId, screenName);
-    if (!result.changed) {
-      return
-    }
-
-    config[configKey] = result.userIds;
-    configIndexes[configKey].delete(internalId);
-    configIndexes[configKey].add(screenName);
-    changedKeys.add(configKey);
-  }
-
-  /**
-   * ユーザー定義分類内の内部 ID を screen name へ置換する。
-   * 入力: 置換元内部 ID、置換先 screen name、変更 key Set。
-   * 出力: なし。
-   * 主な処理内容:
-   * 1. 各分類内だけで重複を解消して置換する
-   * 2. 別分類の重複は分類優先度維持のため残す
-   */
-  function replaceUserIdInCustomCategories (internalId, screenName, changedKeys) {
-    let changed = false;
-    const categoryIndexes = [
-      ...(configIndexes.customCategoryIndexesByInternalUserId.get(internalId) || [])
-    ];
-
-    for (const categoryIndex of categoryIndexes) {
-      const category = config.customUserCategories[categoryIndex];
-      if (!category) {
-        continue
-      }
-
-      const result = replaceUserIdInList(category.userIds, internalId, screenName);
-      if (result.changed) {
-        category.userIds = result.userIds;
-        removeCustomInternalUserIdIndex(internalId, categoryIndex);
-        addCustomCategoryUserIndex(screenName, categoryIndex);
-        changed = true;
-      }
-    }
-
-    if (changed) {
-      changedKeys.add('customUserCategories');
-    }
-  }
-
-  /**
-   * 登録済み内部 ID を取得できた screen name へ置換する。
-   * 入力: userId と userInternalId を持つ投稿情報。
-   * 出力: 置換結果。変更が無ければ changed: false。
-   * 主な処理内容:
-   * 1. 登録済み内部 ID だけを対象にする
-   * 2. 設定配列と判定用インデックスを差分更新する
-   * 3. 変更された保存キーだけ遅延保存する
-   */
-  function replaceKnownInternalUserIdWithScreenName (postInfo) {
-    const internalId = normalizeUserId(postInfo?.userInternalId);
-    const screenName = normalizeUserId(postInfo?.userId);
-
-    if (
-      !isNumericUserId(internalId) ||
-      !screenName ||
-      isNumericUserId(screenName) ||
-      !configIndexes.registeredInternalUserIds.has(internalId)
-    ) {
-      return { changed: false, keys: [] }
-    }
-
-    const changedKeys = new Set();
-    replaceUserIdInConfigList('hiddenUserIds', internalId, screenName, changedKeys);
-    replaceUserIdInConfigList('followUserIds', internalId, screenName, changedKeys);
-    replaceUserIdInConfigList('listUserIds', internalId, screenName, changedKeys);
-    replaceUserIdInCustomCategories(internalId, screenName, changedKeys);
-
-    if (changedKeys.size === 0) {
-      refreshRegisteredInternalUserId(internalId);
-      return { changed: false, keys: [] }
-    }
-
-    refreshUserIdReplacementIndexes(internalId, screenName);
-
-    const shouldDebounceSave = changedKeys.has('customUserCategories');
-    for (const configKey of changedKeys) {
-      if (shouldDebounceSave) {
-        scheduleSaveKey(configKey);
-      } else {
-        void saveKey(configKey).catch(error => {
-          console.error(`[X-Observer] ${configKey} の自動置換保存に失敗しました:`, error);
-        });
-      }
-    }
-
-    const logKey = `${internalId}->${screenName}`;
-    if (!loggedUserIdReplacements.has(logKey)) {
-      loggedUserIdReplacements.add(logKey);
-      console.log('[X-Observer] ユーザーIDをscreen nameへ置換しました:', {
-        from: internalId,
-        to: screenName,
-        keys: [...changedKeys]
-      });
-    }
-
-    return {
-      changed: true,
-      keys: [...changedKeys]
-    }
-  }
-
-  /**
-   * 指定した分類へユーザー ID を追加する。
-   * 入力: 保存先キー、ユーザー ID、ログ用分類名。
-   * 出力: 追加できた場合は true、既存なら false。
-   * 主な処理内容:
-   * 1. 先頭の @ を除去して比較用の形式へ揃える
-   * 2. 未登録時だけ配列へ追加して保存を予約する
-   */
-  function rememberClassifiedUser (configKey, userId, label) {
-    const id = normalizeUserId(userId);
-    const userIdSet = configIndexes[configKey];
-    if (!id || !userIdSet || userIdSet.has(id)) {
-      return false
-    }
-
-    config[configKey].push(id);
-    userIdSet.add(id);
-    addRegisteredInternalUserId(id);
-    void saveKey(configKey);
-    console.log(`[X-Observer] ${label}ユーザー追加: @${id}`);
-    return true
-  }
-
-  /**
    * 非表示ユーザーを追加する。
    * 入力: @ の有無どちらでもよいユーザー ID。
    * 出力: Promise<void>
@@ -1942,31 +920,6 @@
   }
 
   /**
-   * 自動判定した分類ユーザーを保存する。
-   * 入力: タイムライン文脈、ユーザー ID、リポストかどうか。
-   * 出力: 新規追加が発生した場合は true、不要なら false。
-   * 主な処理内容:
-   * 1. リポストや userId なしを除外する
-   * 2. [フォロー中] はフォローとして記録する
-   * 3. [おすすめ] 以外のタブはリストインとして記録する
-   */
-  function learnClassifiedUserFromTab (tabName, userId, isRepost) {
-    if (!userId || isRepost) {
-      return false
-    }
-
-    if (tabName === 'フォロー中') {
-      return rememberClassifiedUser('followUserIds', userId, 'フォロー')
-    }
-
-    if (tabName && tabName !== 'おすすめ') {
-      return rememberClassifiedUser('listUserIds', userId, 'リストイン')
-    }
-
-    return false
-  }
-
-  /**
    * 非表示キーワードを追加する。
    * 入力: 追加したいキーワード文字列。
    * 出力: Promise<void>
@@ -2033,641 +986,6 @@
       '[X-Observer] 現在の設定:',
       full ? JSON.parse(JSON.stringify(config)) : getConfigSummary(config)
     );
-  }
-
-  /**
-   * UI 非表示設定を更新して保存する。
-   * 入力: 非表示を有効にするかどうかの真偽値。
-   * 出力: Promise<void>
-   * 主な処理内容:
-   * 1. 真偽値へ正規化して config に反映する
-   * 2. Tampermonkey ストレージへ保存する
-   */
-  async function setHideUIEnabled (enabled) {
-    config.hideUIEnabled = Boolean(enabled);
-    await saveKey('hideUIEnabled');
-  }
-
-  /**
-   * 自動更新設定を更新して保存する。
-   * 入力: 自動更新を有効にするかどうかの真偽値。
-   * 出力: Promise<void>
-   * 主な処理内容:
-   * 1. 真偽値へ正規化して config に反映する
-   * 2. Tampermonkey ストレージへ保存する
-   */
-  async function setAutoRefreshEnabled (enabled) {
-    config.autoRefreshEnabled = Boolean(enabled);
-    await saveKey('autoRefreshEnabled');
-  }
-
-  /**
-   * 仮想スクロール用セルを article から逆引きする。
-   * 入力: article 要素
-   * 出力: position:absolute の祖先要素。見つからない場合は null
-   * 主な処理内容: 親を数段さかのぼり、X の仮想リストセルを見つける
-   */
-  function getCellDiv (article) {
-    let element = article;
-
-    for (let i = 0; i < 6; i++) {
-      element = element.parentElement;
-      if (!element) return null
-      if (element.style && element.style.position === 'absolute') return element
-    }
-
-    return null
-  }
-
-  /**
-   * 投稿セルごと非表示にする。
-   * 入力: article 要素、非表示理由
-   * 出力: なし
-   * 主な処理内容: 仮想スクロールの空白を防ぐため、article ではなく祖先セルを隠す
-   */
-  function hideArticle (article, reason) {
-    const cellDiv = getCellDiv(article);
-    if (cellDiv) {
-      cellDiv.style.display = 'none';
-    }
-    article.setAttribute(HIDDEN_ATTR, reason);
-  }
-
-  /**
-   * 非表示にしていた投稿セルを再表示する。
-   * 入力: article 要素
-   * 出力: なし
-   * 主な処理内容: 祖先セルの display と data 属性を元に戻す
-   */
-  function unhideArticle (article) {
-    const cellDiv = getCellDiv(article);
-    if (cellDiv) {
-      cellDiv.style.display = '';
-    }
-    article.removeAttribute(HIDDEN_ATTR);
-  }
-
-  /**
-   * タイムライン処理本体をまとめたオブジェクトを生成する。
-   * 入力: なし
-   * 出力: 新規投稿処理、再判定、再適用、スケジュール実行の各関数
-   * 主な処理内容: requestAnimationFrame の保留状態も含めて、投稿処理の状態を閉じ込める
-   */
-  function createProcessor () {
-    let pendingRAF = false;
-
-    /**
-     * 投稿情報から既知の内部 ID を screen name へ置換する。
-     * 入力: 抽出済み投稿情報。
-     * 出力: なし。
-     * 主な処理内容:
-     * 1. 本文投稿のユーザー ID 対応を設定へ反映する
-     * 2. 引用投稿のユーザー ID 対応も色分け用に反映する
-     */
-    function replaceKnownUserIds (info) {
-      replaceKnownInternalUserIdWithScreenName(info);
-      if (info.quote) {
-        replaceKnownInternalUserIdWithScreenName(info.quote);
-      }
-    }
-
-    /**
-     * 未処理 article を走査して初回判定を行う。
-     * 入力: なし
-     * 出力: なし
-     * 主な処理内容: 未処理 article に印を付け、情報抽出後に非表示判定を行う
-     */
-    function processNewArticles () {
-      const articles = document.querySelectorAll(`article:not([${PROCESSED_ATTR}])`);
-      if (articles.length === 0) return
-
-      const tabName = getActiveTabName();
-      const shouldLearnClassifiedUser = isHomeTimelinePage();
-      let didLearnClassifiedUser = false;
-
-      articles.forEach(article => {
-        article.setAttribute(PROCESSED_ATTR, 'true');
-
-        const info = extractPostInfo(article);
-        replaceKnownUserIds(info);
-        if (
-          shouldLearnClassifiedUser &&
-          learnClassifiedUserFromTab(tabName, info.userId, info.isRepost)
-        ) {
-          didLearnClassifiedUser = true;
-        }
-        applyUserLabelsToArticle(article, info, config);
-        if (!info.statusId) return
-
-        console.log('[X-Observer]', { tab: tabName, ...info });
-
-        const hideReason = shouldHide(tabName, info, config);
-        if (hideReason) {
-          hideArticle(article, hideReason);
-          console.log(`[X-Observer] 非表示: ${hideReason}`, info.statusId);
-        }
-      });
-
-      if (didLearnClassifiedUser) {
-        reapplyFilters();
-      }
-    }
-
-    /**
-     * 遅れて読み込まれたメディアを踏まえて再判定する。
-     * 入力: 既に処理済みの article 要素
-     * 出力: なし
-     * 主な処理内容: メディア有無が後から変わるケースに限定して表示状態を更新する
-     */
-    function handleLateMedia (article) {
-      const tabName = getActiveTabName();
-      const info = extractPostInfo(article);
-      replaceKnownUserIds(info);
-      applyUserLabelsToArticle(article, info, config);
-      if (!info.statusId) return
-
-      console.log('[X-Observer] メディア遅延検出、再判定:', {
-        tab: tabName,
-        ...info
-      });
-
-      const hideReason = shouldHide(tabName, info, config);
-      const currentlyHidden = article.hasAttribute(HIDDEN_ATTR);
-
-      if (hideReason && !currentlyHidden) {
-        hideArticle(article, hideReason);
-      } else if (!hideReason && currentlyHidden) {
-        unhideArticle(article);
-      }
-    }
-
-    /**
-     * 既に表示済みの投稿すべてへ現在設定を再適用する。
-     * 入力: なし
-     * 出力: なし
-     * 主な処理内容: 設定変更後に hidden / shown の差分だけを反映する
-     */
-    function reapplyFilters () {
-      const tabName = getActiveTabName();
-      const articles = document.querySelectorAll(`article[${PROCESSED_ATTR}]`);
-      let hiddenCount = 0;
-      let shownCount = 0;
-
-      articles.forEach(article => {
-        const info = extractPostInfo(article);
-        replaceKnownUserIds(info);
-        applyUserLabelsToArticle(article, info, config);
-        if (!info.statusId) return
-
-        const hideReason = shouldHide(tabName, info, config);
-        const currentlyHidden = article.hasAttribute(HIDDEN_ATTR);
-
-        if (hideReason && !currentlyHidden) {
-          hideArticle(article, hideReason);
-          hiddenCount++;
-        } else if (!hideReason && currentlyHidden) {
-          unhideArticle(article);
-          shownCount++;
-        }
-      });
-
-      console.log(
-        `[X-Observer] フィルタ再適用: ${hiddenCount} 件非表示, ${shownCount} 件再表示`
-      );
-    }
-
-    /**
-     * 新規投稿処理を次の描画タイミングへまとめて予約する。
-     * 入力: なし
-     * 出力: なし
-     * 主な処理内容: MutationObserver 多発時の重複実行を pendingRAF で抑制する
-     */
-    function scheduleProcess () {
-      if (pendingRAF) return
-      pendingRAF = true;
-      requestAnimationFrame(() => {
-        pendingRAF = false;
-        processNewArticles();
-      });
-    }
-
-    return {
-      processNewArticles,
-      handleLateMedia,
-      reapplyFilters,
-      scheduleProcess
-    }
-  }
-
-  /**
-   * 新着ポスト自動更新の制御オブジェクトを作る。
-   * 入力: なし。
-   * 出力: start / stop / toggle / applyEnabledState / isEnabled を持つオブジェクト。
-   * 主な処理内容:
-   * 1. interval の開始と停止を管理する
-   * 2. タイムライン上部にいるときだけ新着ボタンを押す
-   * 3. 外部から保存済み設定を反映できる API を提供する
-   */
-  function createAutoRefreshController () {
-    let autoRefreshEnabled = true;
-    let autoRefreshTimer = null;
-
-    /** 「新しいポストを表示」ボタンが表示中かどうかを判定する。*/
-    function isNewPostButtonVisible () {
-      const statusEl = document.querySelector('[role="status"]');
-      if (!statusEl) return false
-
-      const button = statusEl.querySelector('button');
-      return Boolean(button && button.offsetHeight > 0)
-    }
-
-    /** スクロール位置がタイムライン最上部付近かどうかを判定する。*/
-    function isNearTop () {
-      return window.scrollY <= SCROLL_TOP_THRESHOLD
-    }
-
-    /**
-     * 条件を満たす場合だけ新着ボタンを押す。
-     * 入力: なし。
-     * 出力: なし。
-     * 主な処理内容:
-     * 1. 設定が OFF なら何もしない
-     * 2. 最上部かつ新着ボタン表示中ならクリックする
-     */
-    function checkAndAutoRefresh () {
-      if (!autoRefreshEnabled) return
-
-      if (isNearTop() && isNewPostButtonVisible()) {
-        const button = document.querySelector('[role="status"] button');
-        if (button) {
-          button.click();
-          console.log('[X-Observer] 新着ポストを自動更新しました');
-        }
-      }
-    }
-
-    /** interval を開始して自動更新を有効化する。*/
-    function startAutoRefresh () {
-      if (autoRefreshTimer) return
-      autoRefreshTimer = setInterval(checkAndAutoRefresh, AUTO_REFRESH_INTERVAL);
-      autoRefreshEnabled = true;
-      console.log('[X-Observer] 自動更新: ON');
-    }
-
-    /** interval を停止して自動更新を無効化する。*/
-    function stopAutoRefresh () {
-      if (autoRefreshTimer) {
-        clearInterval(autoRefreshTimer);
-        autoRefreshTimer = null;
-      }
-      autoRefreshEnabled = false;
-      console.log('[X-Observer] 自動更新: OFF');
-    }
-
-    /** 現在の状態を反転して自動更新を切り替える。*/
-    function toggleAutoRefresh () {
-      if (autoRefreshEnabled) {
-        stopAutoRefresh();
-      } else {
-        startAutoRefresh();
-      }
-    }
-
-    /**
-     * 保存済み設定の真偽値をそのまま自動更新状態へ反映する。
-     * 入力: 有効にするかどうかの真偽値。
-     * 出力: なし。
-     * 主な処理内容:
-     * 1. true なら interval を開始する
-     * 2. false なら interval を停止する
-     */
-    function applyEnabledState (enabled) {
-      if (enabled) {
-        startAutoRefresh();
-      } else {
-        stopAutoRefresh();
-      }
-    }
-
-    /** 現在の自動更新状態を返す。*/
-    function isEnabled () {
-      return autoRefreshEnabled
-    }
-
-    return {
-      startAutoRefresh,
-      stopAutoRefresh,
-      toggleAutoRefresh,
-      applyEnabledState,
-      isEnabled
-    }
-  }
-
-  /**
-   * HTML へ埋め込む文字列をエスケープする。
-   * 入力: 表示したい文字列。
-   * 出力: HTML として解釈されない安全な文字列。
-   * 主な処理内容:
-   * 1. ユーザー定義分類名が DOM 構造を壊さないよう特殊文字を置き換える
-   */
-  function escapeHtml$1 (value) {
-    return String(value)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;')
-  }
-
-  /**
-   * X 標準ドロップダウンを React の onDismiss 経由で閉じる。
-   * 入力: role="menu" の要素
-   * 出力: なし
-   * 主な処理内容: role="group" から React Fiber をたどり、onDismiss を呼び出す
-   */
-  function closeDropdownMenu (menu) {
-    const groupEl = menu.closest('[role="group"]');
-    if (!groupEl) return
-
-    const fiberKey = Object.keys(groupEl).find(key =>
-      key.startsWith('__reactFiber$')
-    );
-    if (!fiberKey) return
-
-    let fiber = groupEl[fiberKey];
-    for (let i = 0; i < 15 && fiber; i++) {
-      const props = fiber.memoizedProps || {};
-      if (typeof props.onDismiss === 'function') {
-        props.onDismiss();
-        return
-      }
-      fiber = fiber.return;
-    }
-  }
-
-  /**
-   * X 標準メニューへ差し込む独自 menuitem 要素を組み立てる。
-   * 入力: 一意なクラス名、表示ラベル、クリック時の処理
-   * 出力: role="menuitem" を持つ div 要素
-   * 主な処理内容: X 標準メニューへなじむ共通 DOM 構造とイベント処理をまとめる
-   */
-  function createDropdownMenuItem ({ className, label, onSelect }) {
-    const menuItem = document.createElement('div');
-    menuItem.setAttribute('role', 'menuitem');
-    menuItem.setAttribute('tabindex', '0');
-    menuItem.className = className;
-    menuItem.innerHTML = `
-    <div class="xtlo-icon">
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <g>
-          <path d="M3.693 21.707l-1.414-1.414 2.429-2.429c-2.479-2.421-3.606-5.376-3.658-5.513l-.131-.352.131-.352c.133-.353 3.331-8.648 10.937-8.648 2.062 0 3.834.629 5.332 1.644l2.674-2.674 1.414 1.414L3.693 21.707zm-.622-9.706c.356.797 1.354 2.794 3.051 4.449l2.417-2.418c-.361-.609-.553-1.306-.553-2.032 0-2.206 1.794-4 4-4 .727 0 1.424.192 2.033.554l2.263-2.264C14.953 5.434 13.512 5 11.986 5c-5.416 0-8.258 5.535-8.915 7.001zM11.986 10c-1.103 0-2 .897-2 2 0 .441.144.861.41 1.207l2.798-2.797C12.847 10.144 12.427 10 11.986 10zm9.878 7.06l-1.5-1.5c1.094-1.222 1.858-2.534 2.264-3.56-.869-1.907-3.813-7.001-8.642-7.001-.796 0-1.542.124-2.238.332l-1.63-1.63C11.064 3.241 12.136 3 13.271 3c6.256 0 9.573 6.971 9.778 7.432l.151.354-.108.341c-.148.465-1.065 2.893-2.928 4.933z"></path>
-        </g>
-      </svg>
-    </div>
-    <div class="xtlo-label">${escapeHtml$1(label)}</div>
-  `;
-
-    menuItem.addEventListener('click', async event => {
-      event.preventDefault();
-      event.stopPropagation();
-      await onSelect(menuItem);
-    });
-
-    return menuItem
-  }
-
-  /**
-   * 投稿の「...」メニューへ独自の非表示項目を注入する監視を開始する。
-   * 入力: 投稿・ユーザーの非表示登録関数、分類登録関数、現在設定、再適用関数
-   * 出力: MutationObserver
-   * 主な処理内容:
-   * 1. 直前に押された caret を記録する
-   * 2. menu 出現を監視する
-   * 3. 対象投稿の statusId / userId を使って独自 menuitem を注入する
-   * 4. ユーザー定義分類があれば分類追加項目も注入する
-   */
-  function setupDropdownHideMenu ({
-    addHiddenStatus,
-    addHiddenUser,
-    addFollowUser,
-    addListUser,
-    addCustomCategoryUser,
-    config,
-    reapplyFilters
-  }) {
-    // X 標準メニューは「どの投稿から開いたか」を直接渡してこないため、直前クリックを手掛かりにする。
-    let lastClickedCaret = null;
-
-    document.addEventListener(
-      'click',
-      event => {
-        const caretButton = event.target.closest('[data-testid="caret"]');
-        if (caretButton) {
-          lastClickedCaret = caretButton;
-        }
-      },
-      true
-    );
-
-    /**
-     * 対象 menu へ追加分類や非表示の独自項目を差し込む。
-     * 入力: role="menu" の要素
-     * 出力: なし
-     * 主な処理内容:
-     * 1. 直前 caret に対応する article を見つける
-     * 2. ユーザー ID があればフォロー、リスト、ユーザー定義分類、ユーザー非表示を追加する
-     * 3. 投稿 ID があればポスト非表示を追加する
-     */
-    function injectHideMenuItem (menu) {
-      if (
-        menu.querySelector('.xtlo-hide-post-menuitem') ||
-        menu.querySelector('.xtlo-hide-user-menuitem')
-      ) {
-        return
-      }
-      if (!lastClickedCaret) return
-
-      const article = lastClickedCaret.closest('article');
-      if (!article) return
-
-      const info = extractPostInfo(article);
-      if (!info.statusId && !info.userId) return
-
-      if (info.userId) {
-        menu.appendChild(
-          createDropdownMenuItem({
-            className: 'xtlo-hide-post-menuitem',
-            label: `フォローとして追加 (@${info.userId})`,
-            onSelect: async menuItem => {
-              const dropdownMenu = menuItem.closest('[role="menu"]');
-
-              await addFollowUser(info.userId);
-              reapplyFilters();
-
-              if (dropdownMenu) {
-                closeDropdownMenu(dropdownMenu);
-              }
-
-              console.log(
-                `[X-Observer] メニューからフォローユーザーを追加しました: @${info.userId}`
-              );
-            }
-          })
-        );
-
-        menu.appendChild(
-          createDropdownMenuItem({
-            className: 'xtlo-hide-post-menuitem',
-            label: `リストインとして追加 (@${info.userId})`,
-            onSelect: async menuItem => {
-              const dropdownMenu = menuItem.closest('[role="menu"]');
-
-              await addListUser(info.userId);
-              reapplyFilters();
-
-              if (dropdownMenu) {
-                closeDropdownMenu(dropdownMenu);
-              }
-
-              console.log(
-                `[X-Observer] メニューからリストインユーザーを追加しました: @${info.userId}`
-              );
-            }
-          })
-        );
-
-        for (const category of config.customUserCategories) {
-          menu.appendChild(
-            createDropdownMenuItem({
-              className: 'xtlo-hide-post-menuitem',
-              label: `分類「${category.label}」に追加 (@${info.userId})`,
-              onSelect: async menuItem => {
-                const dropdownMenu = menuItem.closest('[role="menu"]');
-
-                await addCustomCategoryUser(category.id, info.userId);
-                reapplyFilters();
-
-                if (dropdownMenu) {
-                  closeDropdownMenu(dropdownMenu);
-                }
-
-                console.log(
-                  `[X-Observer] メニューから${category.label}分類へユーザーを追加しました: @${info.userId}`
-                );
-              }
-            })
-          );
-        }
-
-        menu.appendChild(
-          createDropdownMenuItem({
-            className: 'xtlo-hide-user-menuitem xtlo-hide-post-menuitem',
-            label: `ユーザーを非表示 (@${info.userId})`,
-            onSelect: async menuItem => {
-              const dropdownMenu = menuItem.closest('[role="menu"]');
-
-              await addHiddenUser(info.userId);
-              reapplyFilters();
-
-              if (dropdownMenu) {
-                // ユーザー追加後も X 標準メニューの閉じ方を揃え、開閉状態の不整合を避ける。
-                closeDropdownMenu(dropdownMenu);
-              }
-
-              console.log(
-                `[X-Observer] メニューからユーザーを非表示にしました: @${info.userId}`
-              );
-            }
-          })
-        );
-      }
-
-      if (info.statusId) {
-        menu.appendChild(
-          createDropdownMenuItem({
-            className: 'xtlo-hide-post-menuitem',
-            label: 'ポストを非表示',
-            onSelect: async menuItem => {
-              const dropdownMenu = menuItem.closest('[role="menu"]');
-
-              await addHiddenStatus(info.statusId);
-              reapplyFilters();
-
-              if (dropdownMenu) {
-                // X 側のメニュー管理状態を壊さず閉じるため、DOM 削除ではなく onDismiss を呼ぶ。
-                closeDropdownMenu(dropdownMenu);
-              }
-
-              console.log(
-                `[X-Observer] メニューからポストを非表示にしました: ${info.statusId}`
-              );
-            }
-          })
-        );
-      }
-    }
-
-    // X 側メニューの構築完了前に挿入すると位置や構造が崩れるため、出現監視 + 少し遅延で差し込む。
-    const menuObserver = new MutationObserver(mutations => {
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-          if (node.nodeType !== 1) continue
-
-          const menus = [];
-          if (node.getAttribute && node.getAttribute('role') === 'menu') {
-            menus.push(node);
-          }
-          if (node.querySelectorAll) {
-            menus.push(...node.querySelectorAll('[role="menu"]'));
-          }
-          for (const menu of menus) {
-            setTimeout(() => injectHideMenuItem(menu), 50);
-          }
-        }
-      }
-    });
-
-    menuObserver.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-
-    return menuObserver
-  }
-
-  // UI 非表示用の style 要素を保持する。
-  // ON/OFF のたびに style を探し直さずに済み、二重挿入も防げるため参照を保持する。
-  let hideUIStyleEl = null;
-
-  /**
-   * X のヘッダーや投稿フォームを表示/非表示にする。
-   * 入力: true で非表示を有効化、false で解除。
-   * 出力: なし。
-   * 主な処理内容:
-   * 1. 有効化時は style を挿入する
-   * 2. 無効化時は既存 style を除去する
-   */
-  function setHideUI (enabled) {
-    if (enabled && !hideUIStyleEl) {
-      hideUIStyleEl = GM_addStyle(HIDE_UI_CSS);
-      console.log('[X-Observer] UI非表示: ON');
-    } else if (!enabled && hideUIStyleEl) {
-      hideUIStyleEl.remove();
-      hideUIStyleEl = null;
-      console.log('[X-Observer] UI非表示: OFF');
-    }
-  }
-
-  /** 現在の UI 非表示状態を返す。*/
-  function isHideUIEnabled () {
-    return Boolean(hideUIStyleEl)
-  }
-
-  /** 常時必要なレイアウト CSS と独自メニュー CSS を適用する。*/
-  function applyBaseStyles () {
-    GM_addStyle(COMPACT_LAYOUT_CSS);
-    GM_addStyle(CUSTOM_MENU_CSS);
-    applyUserLabelStyles();
   }
 
   const PAGE_SIZE = 500;
@@ -3523,7 +1841,7 @@
    * 主な処理内容:
    * 1. モーダル DOM を初期化する
    * 2. タブ、ページネーション、追加・削除 UI を描画する
-   * 3. 設定変更時に既存保存ロジックと再適用処理を呼び出す
+   * 3. 設定変更時に既存保存ロジックと安全モード用の分類色再適用を呼び出す
    */
   function createSettingsDialog ({
     addHiddenStatus,
@@ -3547,10 +1865,6 @@
     removeHiddenWord,
     addMediaFilterList,
     removeMediaFilterList,
-    setHideUI,
-    setHideUIEnabled,
-    applyAutoRefreshEnabled,
-    setAutoRefreshEnabled,
     exportConfigToFile,
     importConfigFromFile,
     reapplyFilters
@@ -3962,22 +2276,9 @@
       const content = body.querySelector('.xtlo-settings-content');
 
       if (currentTab === 'settings') {
+        // 安全運用中は自動更新と X UI 非表示を再有効化できないよう、設定タブにも切り替え操作を出さない。
         content.innerHTML = `
         <div class="xtlo-settings-settings-grid">
-          <div class="xtlo-settings-toggle-card">
-            <div class="xtlo-settings-toggle-copy">
-              <div class="xtlo-settings-toggle-title">X の UI を非表示</div>
-              <div class="xtlo-settings-toggle-desc">ヘッダーと投稿フォームを隠して、監視専用の表示に寄せます。</div>
-            </div>
-            <button class="xtlo-settings-switch" data-action="toggle-hide-ui" data-enabled="${String(config.hideUIEnabled)}" aria-label="UI 非表示切り替え"></button>
-          </div>
-          <div class="xtlo-settings-toggle-card">
-            <div class="xtlo-settings-toggle-copy">
-              <div class="xtlo-settings-toggle-title">タイムライン自動更新</div>
-              <div class="xtlo-settings-toggle-desc">最上部にいるときだけ新着ポストの読み込みを自動で実行します。</div>
-            </div>
-            <button class="xtlo-settings-switch" data-action="toggle-auto-refresh" data-enabled="${String(config.autoRefreshEnabled)}" aria-label="自動更新切り替え"></button>
-          </div>
           <div class="xtlo-settings-toggle-card">
             <div class="xtlo-settings-toggle-copy">
               <div class="xtlo-settings-toggle-title">設定ファイル</div>
@@ -3996,7 +2297,7 @@
 
         footer.innerHTML = `
         <div></div>
-        <div class="xtlo-settings-badge">${getFooterBadgeLabel('settings', 2)}</div>
+        <div class="xtlo-settings-badge">${getFooterBadgeLabel('settings', 1)}</div>
       `;
         return
       }
@@ -4068,7 +2369,7 @@
      * 出力: Promise<void>
      * 主な処理内容:
      * 1. 入力を trim してタブごとの形式へ正規化する
-     * 2. 保存後にフィルタを再適用して再描画する
+     * 2. 保存後に安全モード用の分類色再適用を呼び、再描画する
      */
     async function handleAddItem () {
       const body = overlay.querySelector('.xtlo-settings-body');
@@ -4097,7 +2398,7 @@
      * 出力: Promise<void>
      * 主な処理内容:
      * 1. タブに応じた削除関数を呼ぶ
-     * 2. 再適用後に空ページへ残らないようページ番号も補正する
+     * 2. 安全モード用の分類色再適用後に空ページへ残らないようページ番号も補正する
      */
     async function handleRemoveItem (value) {
       const actions = getTabActions(currentTab);
@@ -4183,7 +2484,7 @@
      * 出力: Promise<void>
      * 主な処理内容:
      * 1. 選択された色を保存コールバックへ渡す
-     * 2. 既存タイムラインの分類色を再適用する
+     * 2. 既存 article の分類色だけを再適用する
      */
     async function handleSetCategoryColor (categoryId, color) {
       await setCustomUserCategoryColor(categoryId, color);
@@ -4250,7 +2551,7 @@
      * 出力: Promise<void>
      * 主な処理内容:
      * 1. 再描画でボタンが差し替わってもリスナーを張り直さずに済むよう data-action を読む
-     * 2. タブ切り替え、追加、削除、設定トグルを振り分ける
+     * 2. タブ切り替え、追加、削除、インポート/エクスポートを振り分ける
      */
     async function handleOverlayClick (event) {
       if (event.target === overlay) {
@@ -4320,22 +2621,6 @@
         return
       }
 
-      if (action === 'toggle-hide-ui') {
-        const nextValue = !config.hideUIEnabled;
-        setHideUI(nextValue);
-        await setHideUIEnabled(nextValue);
-        render();
-        return
-      }
-
-      if (action === 'toggle-auto-refresh') {
-        const nextValue = !config.autoRefreshEnabled;
-        applyAutoRefreshEnabled(nextValue);
-        await setAutoRefreshEnabled(nextValue);
-        render();
-        return
-      }
-
       if (action === 'export-config') {
         exportConfigToFile();
         return
@@ -4392,7 +2677,7 @@
      * 入力: change イベント。
      * 出力: なし。
      * 主な処理内容:
-     * 1. 分類色の変更は保存してタイムラインへ再適用する
+     * 1. 分類色の変更は保存して既存 article の分類色だけを再適用する
      * 2. ページ入力欄は不正値を補正して再描画する
      */
     function handleOverlayChange (event) {
@@ -4699,6 +2984,327 @@
     });
   }
 
+  const FOLLOW_LABEL_CLASS = 'xtlo-user-label-follow';
+  const LIST_LABEL_CLASS = 'xtlo-user-label-list';
+  const CUSTOM_LABEL_CLASS = 'xtlo-user-label-custom';
+  const CUSTOM_LABEL_COLORS = ['#f5c542', '#ff7a59', '#b17cff', '#00c2a8', '#ff6fae', '#9ad66b'];
+  const USER_LABEL_CSS = `
+  .${FOLLOW_LABEL_CLASS} {
+    color: #1d9bf0 !important;
+  }
+
+  .${LIST_LABEL_CLASS} {
+    color: #33c46a !important;
+  }
+
+  .${CUSTOM_LABEL_CLASS} {
+    color: var(--xtlo-user-label-color, #f5c542) !important;
+  }
+`;
+
+  let styleInjected = false;
+
+  /**
+   * ユーザー分類ラベル用のスタイルを一度だけ挿入する。
+   * 入力: なし
+   * 出力: なし
+   * 主な処理内容:
+   * 1. フォロー、リスト、ユーザー定義分類用の色を定義する
+   * 2. 多重挿入を防ぐ
+   */
+  function applyUserLabelStyles () {
+    if (styleInjected) return
+
+    GM_addStyle(USER_LABEL_CSS);
+    styleInjected = true;
+  }
+
+  /**
+   * 設定から対象ユーザーの色分類を返す。
+   * 入力: ユーザー ID 候補、現在設定
+   * 出力: 分類種別と色。該当しない場合は null。
+   * 主な処理内容:
+   * 1. スクリーン名と内部数字 ID の候補を同列に扱う
+   * 2. フォロー分類、リスト分類、ユーザー定義分類の順に判定する
+   * 3. ユーザー定義分類は設定色を使い、未設定時だけ登録順の既定色へ戻す
+   */
+  function getUserLabelType (userIdCandidates, config) {
+    if (userIdCandidates.length === 0) return null
+
+    if (findMatchingUserId(userIdCandidates, configIndexes.followUserIds)) {
+      return { type: 'follow' }
+    }
+
+    if (findMatchingUserId(userIdCandidates, configIndexes.listUserIds)) {
+      return { type: 'list' }
+    }
+
+    let customCategoryIndex = null;
+    for (const userId of userIdCandidates) {
+      const candidateIndex = configIndexes.customUserCategoryIndexByUserId.get(userId);
+      if (
+        candidateIndex !== undefined &&
+        (customCategoryIndex === null || candidateIndex < customCategoryIndex)
+      ) {
+        customCategoryIndex = candidateIndex;
+      }
+    }
+
+    if (customCategoryIndex !== null) {
+      const customCategory = config.customUserCategories[customCategoryIndex];
+      return {
+        type: 'custom',
+        color: customCategory.color || CUSTOM_LABEL_COLORS[customCategoryIndex % CUSTOM_LABEL_COLORS.length]
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * プロフィール系リンクかどうかを userId 基準で判定する。
+   * 入力: href 文字列、対象 userId
+   * 出力: 一致時 true
+   * 主な処理内容:
+   * 1. /<userId> または /<userId>/status/... を受け入れる
+   * 2. クエリやハッシュ付きリンクも拾う
+   */
+  function isUserProfileLink (href, userId) {
+    return (
+      href === `/${userId}` ||
+      href.startsWith(`/${userId}/`) ||
+      href.startsWith(`/${userId}?`) ||
+      href.startsWith(`/${userId}#`)
+    )
+  }
+
+  /**
+   * ユーザー ID 表示用の span をリンク内から探す。
+   * 入力: プロフィールリンク要素、対象 userId
+   * 出力: マッチした span 要素、無ければ null
+   * 主な処理内容:
+   * 1. @userId と完全一致する表示だけを対象にする
+   * 2. displayName 側を誤って着色しない
+   */
+  function findUserIdSpan (link, userId) {
+    const expectedText = `@${userId}`;
+    const spans = link.querySelectorAll('span');
+
+    for (const span of spans) {
+      const text = span.textContent?.trim().replace(/\u200b/g, '');
+      if (text === expectedText) {
+        return span
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * プロフィールリンク内の @userId 表示から画面上のユーザー ID を取り出す。
+   * 入力: プロフィールリンク候補の a 要素。
+   * 出力: screen name 形式のユーザー ID。解釈できない場合は null。
+   * 主な処理内容:
+   * 1. リンク内の span から @userId 表示だけを探す
+   * 2. href と表示 ID が対応する場合だけ採用し、表示名や別リンクの誤着色を避ける
+   */
+  function getUserIdFromProfileLink (link) {
+    const href = link.getAttribute('href') || '';
+    const spans = link.querySelectorAll('span');
+
+    for (const span of spans) {
+      const text = span.textContent?.trim().replace(/\u200b/g, '') || '';
+      if (!/^@[A-Za-z0-9_]{1,20}$/.test(text)) {
+        continue
+      }
+
+      const userId = normalizeUserId(text);
+      if (isUserProfileLink(href, userId)) {
+        return userId
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * コンテナ内の既存分類クラスを除去する。
+   * 入力: article または引用カードの要素
+   * 出力: なし
+   * 主な処理内容:
+   * 1. 再適用時に古い色が残らないようクラスを外す
+   */
+  function clearUserLabelClasses (container) {
+    container
+      .querySelectorAll(`.${FOLLOW_LABEL_CLASS}, .${LIST_LABEL_CLASS}, .${CUSTOM_LABEL_CLASS}`)
+      .forEach(element => {
+        element.classList.remove(FOLLOW_LABEL_CLASS, LIST_LABEL_CLASS, CUSTOM_LABEL_CLASS);
+        element.style.removeProperty('--xtlo-user-label-color');
+      });
+  }
+
+  /**
+   * 対象コンテナ内で特定ユーザーの @userId 表示へ色分類を反映する。
+   * 入力: 描画対象コンテナ、ユーザー ID、分類情報
+   * 出力: なし
+   * 主な処理内容:
+   * 1. 対応するプロフィールリンクを探す
+   * 2. @userId 表示用 span へ分類クラスを付ける
+   */
+  function applyLabelToUserInContainer (container, userId, labelType) {
+    if (!userId || !labelType) return
+
+    const className = labelType.type === 'follow'
+      ? FOLLOW_LABEL_CLASS
+      : labelType.type === 'list'
+        ? LIST_LABEL_CLASS
+        : CUSTOM_LABEL_CLASS;
+    const links = container.querySelectorAll('a[href^="/"]');
+
+    for (const link of links) {
+      const href = link.getAttribute('href') || '';
+      if (!isUserProfileLink(href, userId)) {
+        continue
+      }
+
+      const userIdSpan = findUserIdSpan(link, userId);
+      if (userIdSpan) {
+        userIdSpan.classList.add(className);
+        if (labelType.type === 'custom') {
+          userIdSpan.style.setProperty('--xtlo-user-label-color', labelType.color);
+        }
+      }
+    }
+  }
+
+  /**
+   * React 内部データを読まず、DOM 上の @userId 表示だけへ分類色を反映する。
+   * 入力: article 要素、現在設定。
+   * 出力: なし。
+   * 主な処理内容:
+   * 1. 既存の分類クラスを消してから再適用する
+   * 2. プロフィールリンク内の @userId 表示を screen name だけで分類する
+   */
+  function applyUserLabelsFromDom (article, config) {
+    clearUserLabelClasses(article);
+
+    const links = article.querySelectorAll('a[href^="/"]');
+    for (const link of links) {
+      const userId = getUserIdFromProfileLink(link);
+      if (!userId) {
+        continue
+      }
+
+      const labelType = getUserLabelType([userId], config);
+      applyLabelToUserInContainer(article, userId, labelType);
+    }
+  }
+
+  const LABEL_PROCESSED_ATTR = 'data-xtlo-label-processed';
+
+  /**
+   * DOM 上の article へユーザー分類色だけを反映する制御オブジェクトを作る。
+   * 入力: なし。
+   * 出力: processNewArticles / reapplyUserLabels / scheduleProcess / start を持つオブジェクト。
+   * 主な処理内容:
+   * 1. React 内部データや非表示判定を使わず、表示済み article の @userId だけを着色する
+   * 2. MutationObserver の多発を requestAnimationFrame でまとめる
+   * 3. 設定変更時は既存 article の分類色だけを再適用する
+   */
+  function createUserLabelObserver () {
+    let pendingRAF = false;
+    let observer = null;
+
+    /**
+     * 未処理 article へ分類色を反映する。
+     * 入力: なし。
+     * 出力: なし。
+     * 主な処理内容:
+     * 1. 未処理 article だけを対象にする
+     * 2. 投稿の非表示や X の内部データ参照は行わず、分類色だけを付ける
+     */
+    function processNewArticles () {
+      const articles = document.querySelectorAll(`article:not([${LABEL_PROCESSED_ATTR}])`);
+      articles.forEach(article => {
+        article.setAttribute(LABEL_PROCESSED_ATTR, 'true');
+        applyUserLabelsFromDom(article, config);
+      });
+    }
+
+    /**
+     * 既存 article へ分類色を再適用する。
+     * 入力: なし。
+     * 出力: なし。
+     * 主な処理内容:
+     * 1. 設定変更後に分類色のクラスだけを更新する
+     * 2. display やスクロール位置に影響する非表示処理は呼ばない
+     */
+    function reapplyUserLabels () {
+      const articles = document.querySelectorAll(`article[${LABEL_PROCESSED_ATTR}]`);
+      articles.forEach(article => {
+        applyUserLabelsFromDom(article, config);
+      });
+      console.log(`[X-Observer] 安全モード: ${articles.length} 件のユーザー分類色を再適用しました`);
+    }
+
+    /**
+     * 新規 article 処理を次の描画タイミングへまとめて予約する。
+     * 入力: なし。
+     * 出力: なし。
+     * 主な処理内容: DOM 変化が連続しても分類色処理を 1 フレームにまとめる
+     */
+    function scheduleProcess () {
+      if (pendingRAF) return
+      pendingRAF = true;
+      requestAnimationFrame(() => {
+        pendingRAF = false;
+        processNewArticles();
+      });
+    }
+
+    /**
+     * article 追加だけを監視してユーザー分類色を反映する。
+     * 入力: なし。
+     * 出力: MutationObserver。
+     * 主な処理内容:
+     * 1. タイムラインの追加読込を誘発しないようクリックやスクロール操作は行わない
+     * 2. 追加された article を検知した場合だけ分類色処理を予約する
+     */
+    function start () {
+      if (observer) return observer
+
+      observer = new MutationObserver(mutations => {
+        for (const mutation of mutations) {
+          for (const node of mutation.addedNodes) {
+            if (node.nodeType !== 1) continue
+
+            if (
+              (node.matches && node.matches('article')) ||
+              (node.querySelector && node.querySelector('article'))
+            ) {
+              scheduleProcess();
+              return
+            }
+          }
+        }
+      });
+
+      observer.observe(document.body, {
+        childList: true,
+        subtree: true
+      });
+
+      return observer
+    }
+
+    return {
+      processNewArticles,
+      reapplyUserLabels,
+      scheduleProcess,
+      start
+    }
+  }
+
   /**
    * 現在の設定をエクスポート用オブジェクトへ整形する。
    * 入力: なし。
@@ -4970,39 +3576,13 @@
   (function () {
 
     /**
-     * 保存済みの UI 非表示設定を画面へ反映して永続化状態と同期させる。
-     * 入力: 非表示を有効にするかどうかの真偽値。
-     * 出力: Promise<void>
-     * 主な処理内容:
-     * 1. 表示状態を即時に切り替える
-     * 2. 保存値も同じ真偽値へ更新する
-     */
-    async function applyHideUISetting (enabled) {
-      setHideUI(enabled);
-      await setHideUIEnabled(enabled);
-    }
-
-    /**
-     * 保存済みの自動更新設定を画面挙動へ反映して永続化状態と同期させる。
-     * 入力: 自動更新を有効にするかどうかの真偽値、自動更新コントローラー。
-     * 出力: Promise<void>
-     * 主な処理内容:
-     * 1. interval の開始または停止を行う
-     * 2. 保存値も同じ真偽値へ更新する
-     */
-    async function applyAutoRefreshSetting (enabled, autoRefresh) {
-      autoRefresh.applyEnabledState(enabled);
-      await setAutoRefreshEnabled(enabled);
-    }
-
-    /**
      * アプリ全体を初期化する。
      * 入力: なし。
      * 出力: Promise<void>
      * 主な処理内容:
-     * 1. 設定を読み込んで表示状態へ反映する
-     * 2. 監視系とメニュー系の機能を初期化する
-     * 3. コンソール API と設定ダイアログを接続する
+     * 1. 設定を読み込んでユーザー分類色だけを画面へ反映する
+     * 2. 設定ダイアログ、Tampermonkey メニュー、コンソール API を接続する
+     * 3. 安全運用中はタイムライン非表示、自動更新、X 標準 UI 変更、React 内部参照を起動しない
      */
     async function init () {
       await loadConfig();
@@ -5011,26 +3591,25 @@
         getConfigSummary(config)
       );
 
-      const processor = createProcessor();
-      const autoRefresh = createAutoRefreshController();
+      const userLabelObserver = createUserLabelObserver();
 
       /**
-       * インポート後に画面反映と設定依存機能の同期までまとめて行う。
+       * インポート後に設定だけを更新し、ユーザー分類色だけを再適用する。
        * 入力: なし。
        * 出力: Promise<void>
        * 主な処理内容:
        * 1. JSON から設定を取り込む
-       * 2. UI 非表示と自動更新を最新設定へ再同期する
+       * 2. 投稿の非表示や自動更新は再開せず、表示済み article の色だけを更新する
        */
       async function importConfig () {
-        await importConfigFromFile({ reapplyFilters: processor.reapplyFilters });
-        setHideUI(config.hideUIEnabled);
-        autoRefresh.applyEnabledState(config.autoRefreshEnabled);
+        await importConfigFromFile({
+          reapplyFilters: userLabelObserver.reapplyUserLabels
+        });
       }
 
-      applyBaseStyles();
-      setHideUI(config.hideUIEnabled);
-      processor.processNewArticles();
+      applyUserLabelStyles();
+      userLabelObserver.processNewArticles();
+      userLabelObserver.start();
 
       const settingsDialog = createSettingsDialog({
         addHiddenStatus,
@@ -5054,13 +3633,9 @@
         removeHiddenWord,
         addMediaFilterList,
         removeMediaFilterList,
-        setHideUI,
-        setHideUIEnabled,
-        applyAutoRefreshEnabled: enabled => autoRefresh.applyEnabledState(enabled),
-        setAutoRefreshEnabled,
         exportConfigToFile,
         importConfigFromFile: importConfig,
-        reapplyFilters: processor.reapplyFilters
+        reapplyFilters: userLabelObserver.reapplyUserLabels
       });
 
       registerMenuCommands({
@@ -5071,28 +3646,11 @@
         addHiddenWord,
         exportConfigToFile,
         importConfigFromFile: importConfig,
-        reapplyFilters: processor.reapplyFilters,
+        reapplyFilters: userLabelObserver.reapplyUserLabels,
         openSettingsDialog: () => settingsDialog.open()
       });
 
-      setupDropdownHideMenu({
-        addHiddenStatus,
-        addHiddenUser,
-        addFollowUser,
-        addListUser,
-        addCustomCategoryUser,
-        config,
-        reapplyFilters: processor.reapplyFilters
-      });
-
-      setupTimelineObserver({
-        scheduleProcess: processor.scheduleProcess,
-        handleLateMedia: processor.handleLateMedia
-      });
-
-      autoRefresh.applyEnabledState(config.autoRefreshEnabled);
-
-      // 公開 API から設定を変えてもダイアログ表示や保存状態とずれないよう、永続化付きラッパーを公開する。
+      // 公開 API は設定管理と分類色の再適用に絞り、X の内部構造や自動読込へ触れる操作は安全モード中は公開しない。
       exposeApi({
         addMediaFilterList,
         removeMediaFilterList,
@@ -5114,13 +3672,7 @@
         exportConfigToFile,
         importConfigFromFile: importConfig,
         showConfig,
-        reapplyFilters: processor.reapplyFilters,
-        setHideUI: applyHideUISetting,
-        toggleHideUI: () => applyHideUISetting(!isHideUIEnabled()),
-        startAutoRefresh: () => applyAutoRefreshSetting(true, autoRefresh),
-        stopAutoRefresh: () => applyAutoRefreshSetting(false, autoRefresh),
-        toggleAutoRefresh: () =>
-          applyAutoRefreshSetting(!config.autoRefreshEnabled, autoRefresh),
+        reapplyFilters: userLabelObserver.reapplyUserLabels,
         openSettingsDialog: () => settingsDialog.open()
       });
 
@@ -5136,7 +3688,9 @@
         }
       });
 
-      console.log('[X-Observer] タイムライン監視を開始しました');
+      console.log(
+        '[X-Observer] 安全モード: ユーザー分類色のみ有効、非表示・自動更新・X UI 変更は無効です'
+      );
       console.log('[X-Observer] 設定操作は window.XObserver から実行できます');
     }
 
