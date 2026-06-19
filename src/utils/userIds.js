@@ -11,6 +11,19 @@ export function normalizeUserId (userId) {
 }
 
 /**
+ * ユーザー ID が数字だけの内部 ID 形式かどうかを判定する。
+ * 入力: 正規化前後どちらでもよいユーザー ID。
+ * 出力: 数字だけなら true。
+ * 主な処理内容:
+ * 1. 保存形式へ正規化する
+ * 2. 空値を除外して数字だけの ID を判定する
+ */
+export function isNumericUserId (userId) {
+  const normalizedUserId = normalizeUserId(userId)
+  return Boolean(normalizedUserId) && /^\d+$/.test(normalizedUserId)
+}
+
+/**
  * 投稿情報からユーザー判定に使う ID 候補を返す。
  * 入力: 抽出済み投稿情報または引用投稿情報。
  * 出力: 重複を除いたユーザー ID 候補配列。

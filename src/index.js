@@ -24,6 +24,7 @@ import {
   clearHiddenUsers,
   clearListUsers,
   config,
+  flushScheduledSaves,
   loadConfig,
   removeCustomCategoryUser,
   removeCustomUserCategory,
@@ -197,6 +198,18 @@ import { getConfigSummary } from './state/configSummary.js'
       toggleAutoRefresh: () =>
         applyAutoRefreshSetting(!config.autoRefreshEnabled, autoRefresh),
       openSettingsDialog: () => settingsDialog.open()
+    })
+
+    window.addEventListener('pagehide', () => {
+      void flushScheduledSaves()
+    })
+    window.addEventListener('beforeunload', () => {
+      void flushScheduledSaves()
+    })
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        void flushScheduledSaves()
+      }
     })
 
     console.log('[X-Observer] タイムライン監視を開始しました')

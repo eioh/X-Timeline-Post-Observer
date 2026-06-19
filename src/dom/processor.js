@@ -6,7 +6,11 @@ import {
 } from '../extractors/postExtractor.js'
 import { applyUserLabelsToArticle } from '../features/userLabelColors.js'
 import { shouldHide } from '../filters/shouldHide.js'
-import { config, learnClassifiedUserFromTab } from '../state/configStore.js'
+import {
+  config,
+  learnClassifiedUserFromTab,
+  replaceKnownInternalUserIdWithScreenName
+} from '../state/configStore.js'
 import { hideArticle, unhideArticle } from './articleVisibility.js'
 
 /**
@@ -17,6 +21,21 @@ import { hideArticle, unhideArticle } from './articleVisibility.js'
  */
 export function createProcessor () {
   let pendingRAF = false
+
+  /**
+   * 投稿情報から既知の内部 ID を screen name へ置換する。
+   * 入力: 抽出済み投稿情報。
+   * 出力: なし。
+   * 主な処理内容:
+   * 1. 本文投稿のユーザー ID 対応を設定へ反映する
+   * 2. 引用投稿のユーザー ID 対応も色分け用に反映する
+   */
+  function replaceKnownUserIds (info) {
+    replaceKnownInternalUserIdWithScreenName(info)
+    if (info.quote) {
+      replaceKnownInternalUserIdWithScreenName(info.quote)
+    }
+  }
 
   /**
    * 未処理 article を走査して初回判定を行う。
@@ -36,6 +55,7 @@ export function createProcessor () {
       article.setAttribute(PROCESSED_ATTR, 'true')
 
       const info = extractPostInfo(article)
+      replaceKnownUserIds(info)
       if (
         shouldLearnClassifiedUser &&
         learnClassifiedUserFromTab(tabName, info.userId, info.isRepost)
@@ -68,6 +88,7 @@ export function createProcessor () {
   function handleLateMedia (article) {
     const tabName = getActiveTabName()
     const info = extractPostInfo(article)
+    replaceKnownUserIds(info)
     applyUserLabelsToArticle(article, info, config)
     if (!info.statusId) return
 
@@ -100,6 +121,7 @@ export function createProcessor () {
 
     articles.forEach(article => {
       const info = extractPostInfo(article)
+      replaceKnownUserIds(info)
       applyUserLabelsToArticle(article, info, config)
       if (!info.statusId) return
 

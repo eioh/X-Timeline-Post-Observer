@@ -1,11 +1,13 @@
-import { normalizeUserId } from '../utils/userIds.js'
+import { isNumericUserId, normalizeUserId } from '../utils/userIds.js'
 
 // 判定用の派生インデックスを保持する。保存形式は config 側の配列を正とする。
 export const configIndexes = {
   hiddenUserIds: new Set(),
   followUserIds: new Set(),
   listUserIds: new Set(),
-  customUserCategoryIndexByUserId: new Map()
+  customUserCategoryIndexByUserId: new Map(),
+  registeredInternalUserIds: new Set(),
+  customCategoryIndexesByInternalUserId: new Map()
 }
 
 /**
@@ -37,6 +39,19 @@ export function rebuildConfigIndexes (config) {
   configIndexes.followUserIds = createUserIdSet(config.followUserIds)
   configIndexes.listUserIds = createUserIdSet(config.listUserIds)
   configIndexes.customUserCategoryIndexByUserId = new Map()
+  configIndexes.registeredInternalUserIds = new Set()
+  configIndexes.customCategoryIndexesByInternalUserId = new Map()
+
+  for (const userId of [
+    ...config.hiddenUserIds,
+    ...config.followUserIds,
+    ...config.listUserIds
+  ]) {
+    const normalizedUserId = normalizeUserId(userId)
+    if (isNumericUserId(normalizedUserId)) {
+      configIndexes.registeredInternalUserIds.add(normalizedUserId)
+    }
+  }
 
   config.customUserCategories.forEach((category, categoryIndex) => {
     for (const userId of category.userIds) {
@@ -49,6 +64,15 @@ export function rebuildConfigIndexes (config) {
           normalizedUserId,
           categoryIndex
         )
+      }
+      if (isNumericUserId(normalizedUserId)) {
+        configIndexes.registeredInternalUserIds.add(normalizedUserId)
+        if (!configIndexes.customCategoryIndexesByInternalUserId.has(normalizedUserId)) {
+          configIndexes.customCategoryIndexesByInternalUserId.set(normalizedUserId, new Set())
+        }
+        configIndexes.customCategoryIndexesByInternalUserId
+          .get(normalizedUserId)
+          .add(categoryIndex)
       }
     }
   })
