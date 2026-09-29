@@ -1,4 +1,8 @@
-import { findMatchingUserId, getUserIdCandidates } from '../utils/userIds.js'
+import {
+  findMatchingUserId,
+  getUserIdCandidates,
+  normalizeUserId
+} from '../utils/userIds.js'
 import { configIndexes } from '../state/configIndexes.js'
 
 const FOLLOW_LABEL_CLASS = 'xtlo-user-label-follow'
@@ -118,6 +122,33 @@ function findUserIdSpan (link, userId) {
 }
 
 /**
+ * プロフィールリンク内の @userId 表示から画面上のユーザー ID を取り出す。
+ * 入力: プロフィールリンク候補の a 要素。
+ * 出力: screen name 形式のユーザー ID。解釈できない場合は null。
+ * 主な処理内容:
+ * 1. リンク内の span から @userId 表示だけを探す
+ * 2. href と表示 ID が対応する場合だけ採用し、表示名や別リンクの誤着色を避ける
+ */
+function getUserIdFromProfileLink (link) {
+  const href = link.getAttribute('href') || ''
+  const spans = link.querySelectorAll('span')
+
+  for (const span of spans) {
+    const text = span.textContent?.trim().replace(/\u200b/g, '') || ''
+    if (!/^@[A-Za-z0-9_]{1,20}$/.test(text)) {
+      continue
+    }
+
+    const userId = normalizeUserId(text)
+    if (isUserProfileLink(href, userId)) {
+      return userId
+    }
+  }
+
+  return null
+}
+
+/**
  * コンテナ内の既存分類クラスを除去する。
  * 入力: article または引用カードの要素
  * 出力: なし
@@ -192,4 +223,27 @@ export function applyUserLabelsToArticle (article, postInfo, config) {
 
   const quoteLabelType = getUserLabelType(getUserIdCandidates(postInfo.quote), config)
   applyLabelToUserInContainer(quoteContainer, postInfo.quote.userId, quoteLabelType)
+}
+
+/**
+ * React 内部データを読まず、DOM 上の @userId 表示だけへ分類色を反映する。
+ * 入力: article 要素、現在設定。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 既存の分類クラスを消してから再適用する
+ * 2. プロフィールリンク内の @userId 表示を screen name だけで分類する
+ */
+export function applyUserLabelsFromDom (article, config) {
+  clearUserLabelClasses(article)
+
+  const links = article.querySelectorAll('a[href^="/"]')
+  for (const link of links) {
+    const userId = getUserIdFromProfileLink(link)
+    if (!userId) {
+      continue
+    }
+
+    const labelType = getUserLabelType([userId], config)
+    applyLabelToUserInContainer(article, userId, labelType)
+  }
 }

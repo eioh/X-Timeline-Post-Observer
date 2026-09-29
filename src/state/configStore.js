@@ -1,9 +1,24 @@
 import { EXPIRE_MS, STORAGE_KEYS } from '../constants.js'
 import { configIndexes, rebuildConfigIndexes } from './configIndexes.js'
 import { getConfigSummary } from './configSummary.js'
-import { normalizeUserId } from '../utils/userIds.js'
+import { isNumericUserId, normalizeUserId } from '../utils/userIds.js'
 
 const DEFAULT_CUSTOM_CATEGORY_COLOR = '#f5c542'
+const AUTO_REPLACE_SAVE_DELAY_MS = 250
+const PERSISTED_CONFIG_KEYS = [
+  'mediaFilterLists',
+  'hiddenUserIds',
+  'followUserIds',
+  'listUserIds',
+  'customUserCategories',
+  'hiddenWords',
+  'hiddenStatuses',
+  'hideUIEnabled',
+  'autoRefreshEnabled'
+]
+const saveQueues = new Map()
+const saveDebounceTimers = new Map()
+const loggedUserIdReplacements = new Set()
 
 // 現在の設定を一か所に集約して持つ。
 // オブジェクト自体を差し替えると参照先が古いまま残るため、各モジュールはこの中身を書き換える前提で共有する。
@@ -101,8 +116,93 @@ export async function loadConfig () {
  * 2. Tampermonkey ストレージへその項目だけ書き込む
  */
 export async function saveKey (configKey) {
-  const storageKey = STORAGE_KEYS[configKey]
-  await GM_setValues({ [storageKey]: config[configKey] })
+  clearScheduledSaveKey(configKey)
+
+  const previousSave = saveQueues.get(configKey) || Promise.resolve()
+  const nextSave = previousSave
+    .catch(error => {
+      console.error(`[X-Observer] ${configKey} の前回保存に失敗しました:`, error)
+    })
+    .then(async () => {
+      const storageKey = STORAGE_KEYS[configKey]
+      await GM_setValues({ [storageKey]: config[configKey] })
+    })
+
+  saveQueues.set(configKey, nextSave)
+
+  try {
+    await nextSave
+  } finally {
+    if (saveQueues.get(configKey) === nextSave) {
+      saveQueues.delete(configKey)
+    }
+  }
+}
+
+/**
+ * 指定キーの遅延保存タイマーを取り消す。
+ * 入力: config オブジェクト上のキー名。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 自動置換由来の保存予約を即時保存より前に消す
+ */
+function clearScheduledSaveKey (configKey) {
+  const timer = saveDebounceTimers.get(configKey)
+  if (!timer) return
+
+  clearTimeout(timer)
+  saveDebounceTimers.delete(configKey)
+}
+
+/**
+ * 指定キーに対応する設定を少し遅らせて保存する。
+ * 入力: config オブジェクト上のキー名。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 短時間に複数回起きる自動置換をキー単位でまとめる
+ * 2. 実際の保存は saveKey の直列化レイヤーに委譲する
+ */
+function scheduleSaveKey (configKey) {
+  if (!STORAGE_KEYS[configKey]) return
+
+  clearScheduledSaveKey(configKey)
+  const timer = setTimeout(() => {
+    saveDebounceTimers.delete(configKey)
+    void saveKey(configKey).catch(error => {
+      console.error(`[X-Observer] ${configKey} の遅延保存に失敗しました:`, error)
+    })
+  }, AUTO_REPLACE_SAVE_DELAY_MS)
+
+  saveDebounceTimers.set(configKey, timer)
+}
+
+/**
+ * 永続化対象の全設定キーを保存する。
+ * 入力: なし。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 予約済みの遅延保存を取り消す
+ * 2. 各キーを saveKey の直列化レイヤーで保存する
+ */
+async function saveAllKeys () {
+  await Promise.all(PERSISTED_CONFIG_KEYS.map(configKey => saveKey(configKey)))
+}
+
+/**
+ * 予約中の遅延保存をすぐ保存キューへ流す。
+ * 入力: なし。
+ * 出力: Promise<void>
+ * 主な処理内容:
+ * 1. 自動置換で予約された保存キーを取り出す
+ * 2. タイマーを取り消して通常の saveKey で保存する
+ */
+export async function flushScheduledSaves () {
+  const scheduledKeys = [...saveDebounceTimers.keys()]
+  if (scheduledKeys.length === 0) {
+    return
+  }
+
+  await Promise.all(scheduledKeys.map(configKey => saveKey(configKey)))
 }
 
 /**
@@ -126,17 +226,7 @@ export async function replaceConfig (nextConfig) {
     autoRefreshEnabled: nextConfig.autoRefreshEnabled
   })
 
-  await GM_setValues({
-    [STORAGE_KEYS.mediaFilterLists]: config.mediaFilterLists,
-    [STORAGE_KEYS.hiddenUserIds]: config.hiddenUserIds,
-    [STORAGE_KEYS.followUserIds]: config.followUserIds,
-    [STORAGE_KEYS.listUserIds]: config.listUserIds,
-    [STORAGE_KEYS.customUserCategories]: config.customUserCategories,
-    [STORAGE_KEYS.hiddenWords]: config.hiddenWords,
-    [STORAGE_KEYS.hiddenStatuses]: config.hiddenStatuses,
-    [STORAGE_KEYS.hideUIEnabled]: config.hideUIEnabled,
-    [STORAGE_KEYS.autoRefreshEnabled]: config.autoRefreshEnabled
-  })
+  await saveAllKeys()
 }
 
 /** メディアフィルタ対象リストを追加する。*/
@@ -224,6 +314,113 @@ function hasNormalizedUserId (userIds, normalizedUserId) {
 }
 
 /**
+ * 指定した内部 ID が設定のどこかに残っているか判定する。
+ * 入力: 正規化済み内部 ID。
+ * 出力: 残っていれば true。
+ * 主な処理内容:
+ * 1. 単純リストの判定用 Set を確認する
+ * 2. custom 分類の保存配列を正規化比較する
+ */
+function hasInternalUserIdAnywhere (normalizedInternalId) {
+  if (!isNumericUserId(normalizedInternalId)) {
+    return false
+  }
+
+  return (
+    configIndexes.hiddenUserIds.has(normalizedInternalId) ||
+    configIndexes.followUserIds.has(normalizedInternalId) ||
+    configIndexes.listUserIds.has(normalizedInternalId) ||
+    Boolean(
+      configIndexes.customCategoryIndexesByInternalUserId.get(normalizedInternalId)
+        ?.size
+    )
+  )
+}
+
+/**
+ * 数字だけのユーザー ID を登録済み内部 ID インデックスへ追加する。
+ * 入力: 正規化済みユーザー ID。
+ * 出力: なし。
+ * 主な処理内容: 数字 ID だけを置換候補インデックスへ入れる
+ */
+function addRegisteredInternalUserId (normalizedUserId) {
+  if (isNumericUserId(normalizedUserId)) {
+    configIndexes.registeredInternalUserIds.add(normalizedUserId)
+  }
+}
+
+/**
+ * custom 分類内の内部 ID 位置インデックスへ分類 index を追加する。
+ * 入力: 正規化済み内部 ID、分類 index。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 数字 ID だけを対象にする
+ * 2. 内部 ID が存在する分類 index を記録する
+ */
+function addCustomInternalUserIdIndex (normalizedUserId, categoryIndex) {
+  if (!isNumericUserId(normalizedUserId)) {
+    return
+  }
+
+  if (!configIndexes.customCategoryIndexesByInternalUserId.has(normalizedUserId)) {
+    configIndexes.customCategoryIndexesByInternalUserId.set(normalizedUserId, new Set())
+  }
+  configIndexes.customCategoryIndexesByInternalUserId
+    .get(normalizedUserId)
+    .add(categoryIndex)
+}
+
+/**
+ * custom 分類内の内部 ID 位置インデックスから分類 index を外す。
+ * 入力: 正規化済み内部 ID、分類 index。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 指定分類に同じ内部 ID が残っていれば保持する
+ * 2. 残っていなければ分類 index を削除する
+ */
+function removeCustomInternalUserIdIndex (normalizedUserId, categoryIndex) {
+  if (!isNumericUserId(normalizedUserId)) {
+    return
+  }
+
+  const category = config.customUserCategories[categoryIndex]
+  const categoryIndexes =
+    configIndexes.customCategoryIndexesByInternalUserId.get(normalizedUserId)
+  if (!categoryIndexes || !category) {
+    return
+  }
+
+  if (hasNormalizedUserId(category.userIds, normalizedUserId)) {
+    return
+  }
+
+  categoryIndexes.delete(categoryIndex)
+  if (categoryIndexes.size === 0) {
+    configIndexes.customCategoryIndexesByInternalUserId.delete(normalizedUserId)
+  }
+}
+
+/**
+ * 登録済み内部 ID インデックスを現在設定に合わせて更新する。
+ * 入力: 正規化済みユーザー ID。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 数字 ID 以外は無視する
+ * 2. 設定内に残っていれば保持し、残っていなければ削除する
+ */
+function refreshRegisteredInternalUserId (normalizedUserId) {
+  if (!isNumericUserId(normalizedUserId)) {
+    return
+  }
+
+  if (hasInternalUserIdAnywhere(normalizedUserId)) {
+    configIndexes.registeredInternalUserIds.add(normalizedUserId)
+  } else {
+    configIndexes.registeredInternalUserIds.delete(normalizedUserId)
+  }
+}
+
+/**
  * custom 分類へ追加したユーザー ID を判定インデックスへ反映する。
  * 入力: 正規化済み ID、追加先分類 index。
  * 出力: なし。
@@ -268,6 +465,186 @@ function removeCustomCategoryUserIndex (normalizedUserId, removedCategoryIndex) 
 }
 
 /**
+ * 内部 ID から screen name への置換後に custom 系インデックスを更新する。
+ * 入力: 置換元の内部 ID、置換先の screen name。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. custom 分類を一度だけ走査して双方の最小分類 index を探す
+ * 2. custom Map と登録済み内部 ID Set を現在設定へ同期する
+ */
+function refreshUserIdReplacementIndexes (internalId, screenName) {
+  const internalCategoryIndexes =
+    configIndexes.customCategoryIndexesByInternalUserId.get(internalId)
+  if (!internalCategoryIndexes || internalCategoryIndexes.size === 0) {
+    configIndexes.customUserCategoryIndexByUserId.delete(internalId)
+  } else {
+    configIndexes.customUserCategoryIndexByUserId.set(
+      internalId,
+      Math.min(...internalCategoryIndexes)
+    )
+  }
+
+  const screenNameCategoryIndex =
+    configIndexes.customUserCategoryIndexByUserId.get(screenName)
+  if (screenNameCategoryIndex !== undefined) {
+    configIndexes.customUserCategoryIndexByUserId.set(
+      screenName,
+      screenNameCategoryIndex
+    )
+  }
+
+  refreshRegisteredInternalUserId(internalId)
+}
+
+/**
+ * ユーザー ID 配列内の内部 ID を screen name へ置換する。
+ * 入力: ユーザー ID 配列、置換元内部 ID、置換先 screen name。
+ * 出力: 変更後の配列と変更有無。
+ * 主な処理内容:
+ * 1. 同じ配列内に screen name があれば内部 ID を削除する
+ * 2. 無ければ内部 ID を screen name へ置換する
+ */
+function replaceUserIdInList (userIds, internalId, screenName) {
+  const hasScreenName = hasNormalizedUserId(userIds, screenName)
+  let changed = false
+  let didInsertScreenName = hasScreenName
+
+  const nextUserIds = userIds
+    .map(userId => {
+      if (normalizeUserId(userId) !== internalId) {
+        return userId
+      }
+
+      changed = true
+      if (didInsertScreenName) {
+        return null
+      }
+
+      didInsertScreenName = true
+      return screenName
+    })
+    .filter(Boolean)
+
+  return { userIds: nextUserIds, changed }
+}
+
+/**
+ * 単純ユーザー ID リスト内の内部 ID を screen name へ置換する。
+ * 入力: config キー、置換元内部 ID、置換先 screen name、変更 key Set。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 保存配列を置換する
+ * 2. 対応する判定用 Set も差分更新する
+ */
+function replaceUserIdInConfigList (configKey, internalId, screenName, changedKeys) {
+  const result = replaceUserIdInList(config[configKey], internalId, screenName)
+  if (!result.changed) {
+    return
+  }
+
+  config[configKey] = result.userIds
+  configIndexes[configKey].delete(internalId)
+  configIndexes[configKey].add(screenName)
+  changedKeys.add(configKey)
+}
+
+/**
+ * ユーザー定義分類内の内部 ID を screen name へ置換する。
+ * 入力: 置換元内部 ID、置換先 screen name、変更 key Set。
+ * 出力: なし。
+ * 主な処理内容:
+ * 1. 各分類内だけで重複を解消して置換する
+ * 2. 別分類の重複は分類優先度維持のため残す
+ */
+function replaceUserIdInCustomCategories (internalId, screenName, changedKeys) {
+  let changed = false
+  const categoryIndexes = [
+    ...(configIndexes.customCategoryIndexesByInternalUserId.get(internalId) || [])
+  ]
+
+  for (const categoryIndex of categoryIndexes) {
+    const category = config.customUserCategories[categoryIndex]
+    if (!category) {
+      continue
+    }
+
+    const result = replaceUserIdInList(category.userIds, internalId, screenName)
+    if (result.changed) {
+      category.userIds = result.userIds
+      removeCustomInternalUserIdIndex(internalId, categoryIndex)
+      addCustomCategoryUserIndex(screenName, categoryIndex)
+      changed = true
+    }
+  }
+
+  if (changed) {
+    changedKeys.add('customUserCategories')
+  }
+}
+
+/**
+ * 登録済み内部 ID を取得できた screen name へ置換する。
+ * 入力: userId と userInternalId を持つ投稿情報。
+ * 出力: 置換結果。変更が無ければ changed: false。
+ * 主な処理内容:
+ * 1. 登録済み内部 ID だけを対象にする
+ * 2. 設定配列と判定用インデックスを差分更新する
+ * 3. 変更された保存キーだけ遅延保存する
+ */
+export function replaceKnownInternalUserIdWithScreenName (postInfo) {
+  const internalId = normalizeUserId(postInfo?.userInternalId)
+  const screenName = normalizeUserId(postInfo?.userId)
+
+  if (
+    !isNumericUserId(internalId) ||
+    !screenName ||
+    isNumericUserId(screenName) ||
+    !configIndexes.registeredInternalUserIds.has(internalId)
+  ) {
+    return { changed: false, keys: [] }
+  }
+
+  const changedKeys = new Set()
+  replaceUserIdInConfigList('hiddenUserIds', internalId, screenName, changedKeys)
+  replaceUserIdInConfigList('followUserIds', internalId, screenName, changedKeys)
+  replaceUserIdInConfigList('listUserIds', internalId, screenName, changedKeys)
+  replaceUserIdInCustomCategories(internalId, screenName, changedKeys)
+
+  if (changedKeys.size === 0) {
+    refreshRegisteredInternalUserId(internalId)
+    return { changed: false, keys: [] }
+  }
+
+  refreshUserIdReplacementIndexes(internalId, screenName)
+
+  const shouldDebounceSave = changedKeys.has('customUserCategories')
+  for (const configKey of changedKeys) {
+    if (shouldDebounceSave) {
+      scheduleSaveKey(configKey)
+    } else {
+      void saveKey(configKey).catch(error => {
+        console.error(`[X-Observer] ${configKey} の自動置換保存に失敗しました:`, error)
+      })
+    }
+  }
+
+  const logKey = `${internalId}->${screenName}`
+  if (!loggedUserIdReplacements.has(logKey)) {
+    loggedUserIdReplacements.add(logKey)
+    console.log('[X-Observer] ユーザーIDをscreen nameへ置換しました:', {
+      from: internalId,
+      to: screenName,
+      keys: [...changedKeys]
+    })
+  }
+
+  return {
+    changed: true,
+    keys: [...changedKeys]
+  }
+}
+
+/**
  * 指定した分類へユーザー ID を追加する。
  * 入力: 保存先キー、ユーザー ID、ログ用分類名。
  * 出力: 追加できた場合は true、既存なら false。
@@ -284,6 +661,7 @@ function rememberClassifiedUser (configKey, userId, label) {
 
   config[configKey].push(id)
   userIdSet.add(id)
+  addRegisteredInternalUserId(id)
   void saveKey(configKey)
   console.log(`[X-Observer] ${label}ユーザー追加: @${id}`)
   return true
@@ -302,6 +680,7 @@ export async function addHiddenUser (userId) {
   if (id && !configIndexes.hiddenUserIds.has(id)) {
     config.hiddenUserIds.push(id)
     configIndexes.hiddenUserIds.add(id)
+    addRegisteredInternalUserId(id)
     await saveKey('hiddenUserIds')
     console.log(`[X-Observer] 非表示ユーザー追加: @${id}`)
   }
@@ -314,6 +693,7 @@ export async function removeHiddenUser (userId) {
     user => normalizeUserId(user) !== id
   )
   configIndexes.hiddenUserIds.delete(id)
+  refreshRegisteredInternalUserId(id)
   await saveKey('hiddenUserIds')
   console.log(`[X-Observer] 非表示ユーザー削除: @${id}`)
 }
@@ -329,6 +709,7 @@ export async function removeHiddenUser (userId) {
 export async function clearHiddenUsers () {
   config.hiddenUserIds = []
   configIndexes.hiddenUserIds.clear()
+  rebuildConfigIndexes(config)
   await saveKey('hiddenUserIds')
   console.log('[X-Observer] 非表示ユーザーをすべて削除しました')
 }
@@ -346,6 +727,7 @@ export async function addFollowUser (userId) {
   if (id && !configIndexes.followUserIds.has(id)) {
     config.followUserIds.push(id)
     configIndexes.followUserIds.add(id)
+    addRegisteredInternalUserId(id)
     await saveKey('followUserIds')
     console.log(`[X-Observer] フォローユーザー追加: @${id}`)
   }
@@ -358,6 +740,7 @@ export async function removeFollowUser (userId) {
     user => normalizeUserId(user) !== id
   )
   configIndexes.followUserIds.delete(id)
+  refreshRegisteredInternalUserId(id)
   await saveKey('followUserIds')
   console.log(`[X-Observer] フォローユーザー削除: @${id}`)
 }
@@ -373,6 +756,7 @@ export async function removeFollowUser (userId) {
 export async function clearFollowUsers () {
   config.followUserIds = []
   configIndexes.followUserIds.clear()
+  rebuildConfigIndexes(config)
   await saveKey('followUserIds')
   console.log('[X-Observer] フォローユーザーをすべて削除しました')
 }
@@ -390,6 +774,7 @@ export async function addListUser (userId) {
   if (id && !configIndexes.listUserIds.has(id)) {
     config.listUserIds.push(id)
     configIndexes.listUserIds.add(id)
+    addRegisteredInternalUserId(id)
     await saveKey('listUserIds')
     console.log(`[X-Observer] リストインユーザー追加: @${id}`)
   }
@@ -402,6 +787,7 @@ export async function removeListUser (userId) {
     user => normalizeUserId(user) !== id
   )
   configIndexes.listUserIds.delete(id)
+  refreshRegisteredInternalUserId(id)
   await saveKey('listUserIds')
   console.log(`[X-Observer] リストインユーザー削除: @${id}`)
 }
@@ -417,6 +803,7 @@ export async function removeListUser (userId) {
 export async function clearListUsers () {
   config.listUserIds = []
   configIndexes.listUserIds.clear()
+  rebuildConfigIndexes(config)
   await saveKey('listUserIds')
   console.log('[X-Observer] リストインユーザーをすべて削除しました')
 }
@@ -508,6 +895,8 @@ export async function addCustomCategoryUser (categoryId, userId) {
 
   category.userIds.push(id)
   addCustomCategoryUserIndex(id, categoryIndex)
+  addCustomInternalUserIdIndex(id, categoryIndex)
+  addRegisteredInternalUserId(id)
   await saveKey('customUserCategories')
   console.log(`[X-Observer] ${category.label}ユーザー追加: @${id}`)
 }
@@ -530,6 +919,8 @@ export async function removeCustomCategoryUser (categoryId, userId) {
 
   category.userIds = category.userIds.filter(user => normalizeUserId(user) !== id)
   removeCustomCategoryUserIndex(id, categoryIndex)
+  removeCustomInternalUserIdIndex(id, categoryIndex)
+  refreshRegisteredInternalUserId(id)
   await saveKey('customUserCategories')
   console.log(`[X-Observer] ${category.label}ユーザー削除: @${id}`)
 }

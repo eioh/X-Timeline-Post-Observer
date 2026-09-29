@@ -854,7 +854,7 @@ function getDefaultTabForCategory (categoryKey) {
  * 主な処理内容:
  * 1. モーダル DOM を初期化する
  * 2. タブ、ページネーション、追加・削除 UI を描画する
- * 3. 設定変更時に既存保存ロジックと再適用処理を呼び出す
+ * 3. 設定変更時に既存保存ロジックと安全モード用の分類色再適用を呼び出す
  */
 export function createSettingsDialog ({
   addHiddenStatus,
@@ -878,10 +878,6 @@ export function createSettingsDialog ({
   removeHiddenWord,
   addMediaFilterList,
   removeMediaFilterList,
-  setHideUI,
-  setHideUIEnabled,
-  applyAutoRefreshEnabled,
-  setAutoRefreshEnabled,
   exportConfigToFile,
   importConfigFromFile,
   reapplyFilters
@@ -1293,22 +1289,9 @@ export function createSettingsDialog ({
     const content = body.querySelector('.xtlo-settings-content')
 
     if (currentTab === 'settings') {
+      // 安全運用中は自動更新と X UI 非表示を再有効化できないよう、設定タブにも切り替え操作を出さない。
       content.innerHTML = `
         <div class="xtlo-settings-settings-grid">
-          <div class="xtlo-settings-toggle-card">
-            <div class="xtlo-settings-toggle-copy">
-              <div class="xtlo-settings-toggle-title">X の UI を非表示</div>
-              <div class="xtlo-settings-toggle-desc">ヘッダーと投稿フォームを隠して、監視専用の表示に寄せます。</div>
-            </div>
-            <button class="xtlo-settings-switch" data-action="toggle-hide-ui" data-enabled="${String(config.hideUIEnabled)}" aria-label="UI 非表示切り替え"></button>
-          </div>
-          <div class="xtlo-settings-toggle-card">
-            <div class="xtlo-settings-toggle-copy">
-              <div class="xtlo-settings-toggle-title">タイムライン自動更新</div>
-              <div class="xtlo-settings-toggle-desc">最上部にいるときだけ新着ポストの読み込みを自動で実行します。</div>
-            </div>
-            <button class="xtlo-settings-switch" data-action="toggle-auto-refresh" data-enabled="${String(config.autoRefreshEnabled)}" aria-label="自動更新切り替え"></button>
-          </div>
           <div class="xtlo-settings-toggle-card">
             <div class="xtlo-settings-toggle-copy">
               <div class="xtlo-settings-toggle-title">設定ファイル</div>
@@ -1327,7 +1310,7 @@ export function createSettingsDialog ({
 
       footer.innerHTML = `
         <div></div>
-        <div class="xtlo-settings-badge">${getFooterBadgeLabel('settings', 2)}</div>
+        <div class="xtlo-settings-badge">${getFooterBadgeLabel('settings', 1)}</div>
       `
       return
     }
@@ -1399,7 +1382,7 @@ export function createSettingsDialog ({
    * 出力: Promise<void>
    * 主な処理内容:
    * 1. 入力を trim してタブごとの形式へ正規化する
-   * 2. 保存後にフィルタを再適用して再描画する
+   * 2. 保存後に安全モード用の分類色再適用を呼び、再描画する
    */
   async function handleAddItem () {
     const body = overlay.querySelector('.xtlo-settings-body')
@@ -1428,7 +1411,7 @@ export function createSettingsDialog ({
    * 出力: Promise<void>
    * 主な処理内容:
    * 1. タブに応じた削除関数を呼ぶ
-   * 2. 再適用後に空ページへ残らないようページ番号も補正する
+   * 2. 安全モード用の分類色再適用後に空ページへ残らないようページ番号も補正する
    */
   async function handleRemoveItem (value) {
     const actions = getTabActions(currentTab)
@@ -1514,7 +1497,7 @@ export function createSettingsDialog ({
    * 出力: Promise<void>
    * 主な処理内容:
    * 1. 選択された色を保存コールバックへ渡す
-   * 2. 既存タイムラインの分類色を再適用する
+   * 2. 既存 article の分類色だけを再適用する
    */
   async function handleSetCategoryColor (categoryId, color) {
     await setCustomUserCategoryColor(categoryId, color)
@@ -1581,7 +1564,7 @@ export function createSettingsDialog ({
    * 出力: Promise<void>
    * 主な処理内容:
    * 1. 再描画でボタンが差し替わってもリスナーを張り直さずに済むよう data-action を読む
-   * 2. タブ切り替え、追加、削除、設定トグルを振り分ける
+   * 2. タブ切り替え、追加、削除、インポート/エクスポートを振り分ける
    */
   async function handleOverlayClick (event) {
     if (event.target === overlay) {
@@ -1651,22 +1634,6 @@ export function createSettingsDialog ({
       return
     }
 
-    if (action === 'toggle-hide-ui') {
-      const nextValue = !config.hideUIEnabled
-      setHideUI(nextValue)
-      await setHideUIEnabled(nextValue)
-      render()
-      return
-    }
-
-    if (action === 'toggle-auto-refresh') {
-      const nextValue = !config.autoRefreshEnabled
-      applyAutoRefreshEnabled(nextValue)
-      await setAutoRefreshEnabled(nextValue)
-      render()
-      return
-    }
-
     if (action === 'export-config') {
       exportConfigToFile()
       return
@@ -1723,7 +1690,7 @@ export function createSettingsDialog ({
    * 入力: change イベント。
    * 出力: なし。
    * 主な処理内容:
-   * 1. 分類色の変更は保存してタイムラインへ再適用する
+   * 1. 分類色の変更は保存して既存 article の分類色だけを再適用する
    * 2. ページ入力欄は不正値を補正して再描画する
    */
   function handleOverlayChange (event) {
